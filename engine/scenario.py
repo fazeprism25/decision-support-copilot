@@ -48,6 +48,12 @@ class Target(_M):
     metric: Literal["on_time_pct", "max_utilisation_pct", "margin_per_order", "unserved_per_day", "avg_cycle_time"]
     op: Literal[">=", "<="]
     value: float
+    segment_column: str | None = Field(None, description="optional: only rows where this column == segment_value")
+    segment_value: str | None = None
+
+    def label(self) -> str:
+        seg = f" for {self.segment_column} = {self.segment_value}" if self.segment_column else ""
+        return f"{self.metric}{seg} {self.op} {self.value:g}"
 
 
 class Params(_M):
@@ -159,6 +165,14 @@ def validate_params(p: Params, df: pd.DataFrame, roles: dict[str, str], setup: S
     for pc in p.price_changes:
         if roles.get(pc.column) != "money":
             errs.append(f"'{pc.column}' is not a money column")
+    for t in p.targets:
+        if t.segment_column:
+            if t.segment_column not in df:
+                errs.append(f"'{t.segment_column}' is not a column")
+            elif str(t.segment_value) not in set(df[t.segment_column].dropna().astype("string")):
+                errs.append(f"'{t.segment_value}' not found in '{t.segment_column}'")
+            if t.metric != "on_time_pct":
+                errs.append("segment targets are supported for on_time_pct only")
     if p.util_cap is not None and not 0.1 <= p.util_cap <= 1.0:
         errs.append("util_cap must be between 0.1 and 1.0")
     return errs
@@ -306,6 +320,25 @@ def _regime(stats, load, cap, util_cap, b, util_b, extra_min):
                 time_s=time_s / served_w if served_w else np.nan)
 
 
+def _on_time_subset(stats, r, extra_min) -> float:
+    """On-time share for a subset of rows (e.g. one priority) under a regime's allocation and delays."""
+    on = w_tot = 0.0
+    for st in stats:
+        e = st.name
+        if e not in r["kept"] or not len(st.actual):
+            continue
+        load = r["kept"][e] + sum(r["flow"][e].values()) + r["unserved"][e]
+        if load <= 0:
+            continue
+        stay, moved = r["kept"][e] / load, {x: v / load for x, v in r["flow"][e].items()}
+        served = stay + sum(moved.values())
+        on += len(st.actual) * (stay * float(np.mean(st.actual + r["dT"][e] <= st.promised)) +
+                                sum(m * float(np.mean(st.actual + r["dT"][x] + extra_min <= st.promised))
+                                    for x, m in moved.items()))
+        w_tot += len(st.actual) * served
+    return 100 * on / w_tot if w_tot else np.nan
+
+
 def cascade(df_base: pd.DataFrame, df_scen: pd.DataFrame, s: Setup, p: Params,
             default_extra_minutes: float = 10.0) -> dict:
     """Run the dependency chain for baseline and scenario. Every scenario number is an estimate."""
@@ -409,12 +442,20 @@ def cascade(df_base: pd.DataFrame, df_scen: pd.DataFrame, s: Setup, p: Params,
     if over and verdict == "Feasible":
         verdict = "Feasible with risk"
         reasons.append(f"{', '.join(sorted(set(over)))} above the {util_cap:.0%} utilisation cap")
+    target_rows = []
     for t in p.targets:
-        v = metrics[t.metric]
-        ok = v >= t.value if t.op == ">=" else v <= t.value
+        if t.segment_column:
+            sub = df_base[df_base[t.segment_column].astype("string") == str(t.segment_value)]
+            sub_stats, _ = entity_stats(sub, s) if len(sub) else ([], days)
+            v = avg(lambda r, c: _on_time_subset(sub_stats, r, extra_min)) if regs else np.nan
+            v_b = _on_time_subset(sub_stats, reg_b, 0.0)
+        else:
+            v, v_b = metrics[t.metric], None
+        ok = bool(pd.notna(v) and (v >= t.value if t.op == ">=" else v <= t.value))
+        target_rows.append({"target": t.label(), "baseline": v_b, "scenario estimate": v, "met": ok})
         if not ok:
             verdict = "Not feasible"
-            reasons.append(f"target {t.metric} {t.op} {t.value:g} not met (estimate {v:,.2f})")
+            reasons.append(f"target {t.label()} not met (estimate {v:,.2f})")
     if not reasons:
         reasons.append(f"all load served with every entity at or below {util_cap:.0%}")
 
@@ -433,7 +474,7 @@ def cascade(df_base: pd.DataFrame, df_scen: pd.DataFrame, s: Setup, p: Params,
         "est. extra minutes": round(last["dT"][e], 1),
     } for e in names])
     return {"steps": pd.DataFrame(rows), "entities": ent, "verdict": verdict, "reasons": reasons,
-            "metrics": metrics, "days": days, "affected_days": d_aff, "basis": basis, "calibration": calib,
+            "metrics": metrics, "targets": pd.DataFrame(target_rows), "days": days, "affected_days": d_aff, "basis": basis, "calibration": calib,
             "assumptions": {"utilisation cap": f"{util_cap:.0%}", "extra cost per moved order": extra_cost,
                             "extra minutes per moved order": extra_min,
                             "wait model": f"wait ∝ 1/(1 − utilisation), utilisation capped at {UTIL_CEILING:.0%}"}}

@@ -4,7 +4,8 @@ import hashlib
 import streamlit as st
 
 from engine import kpis as K
-from engine.config import get_settings
+from engine import llm
+from engine.domains import delivery as D
 from engine.llm import LLMError, chat_json
 from engine.profile import to_datetime_clean
 from ui import state
@@ -29,8 +30,8 @@ def _columns_for_prompt(ctx: K.Ctx) -> list[dict]:
     for c, r in ctx.roles.items():
         p = prof[c]
         d = {"column": c, "role": r, "meaning": mean.get(c, ""), "distinct": p["n_unique"]}
-        if "top_values" in p and p["n_unique"] <= 20:
-            d["labels"] = list(p["top_values"])
+        if "top_values" in p and p["n_unique"] <= 20:  # labels as the data now has them (after value mapping)
+            d["labels"] = list(dict.fromkeys(str(state.vmap().get(c, {}).get(v, v)) for v in p["top_values"]))
         if c in ctx.entity_of:
             d["entity_attribute_of"] = ctx.entity_of[c]
         out.append(d)
@@ -43,21 +44,46 @@ def _ai_plan(df, ctx) -> tuple[list[dict], str]:
                     cache_key=f"kpis:{st.session_state.dataset_id}:{sig}",
                     system="You select analytics calculations from a fixed catalog. Output strict JSON only.")
     items = raw.get("kpis", []) if isinstance(raw, dict) else []
-    plan, rejected = [], []
+    plan, rejected, fixed = [], [], 0
+    pk = state.pack()
     for it in items:
         if not isinstance(it, dict):
             continue
+        p = it.get("params") or {}
+        if pk.active and it.get("calc") == "margin" and (p.get("revenue"), p.get("cost")) != (pk.cols["fee"], pk.cols["cost"]):
+            it = {**it, "params": {"revenue": pk.cols["fee"], "cost": pk.cols["cost"]},
+                  "title": f"Delivery margin ({pk.cols['fee']} − {pk.cols['cost']})"}
+            fixed += 1
         errs = K.validate(it, df, ctx)
         (rejected.append(f"{it.get('calc')}: {'; '.join(errs)}") if errs else plan.append(it))
     if not plan:
         raise LLMError("AI returned no valid KPI choices.")
     msg = f"AI chose {len(plan)} KPIs." + (f" Rejected {len(rejected)} invalid choice(s): " + " | ".join(rejected)
-                                           if rejected else "")
+                                           if rejected else "") +         (f" Corrected {fixed} margin KPI(s) to fee − cost (order value is not revenue)." if fixed else "")
     return plan, msg
 
 
+def _pack_items() -> list[dict]:
+    pk = state.pack()
+    if not pk.active:
+        return []
+    c = pk.cols
+    ot = {"actual": c["actual"], "promised": c["promised"]}
+    if c["status"] and pk.completed:
+        ot |= {"status": c["status"], "completed_values": pk.completed}
+    return [{"calc": "on_time_rate", "params": ot, "title": "On-time rate"},
+            {"calc": "margin", "params": {"revenue": c["fee"], "cost": c["cost"]},
+             "title": f"Delivery margin ({c['fee']} − {c['cost']})"}]
+
+
 def _make_plan(df, ctx, use_ai: bool):
-    if use_ai and get_settings().ai_enabled:
+    _make_plan_inner(df, ctx, use_ai)
+    have = {it.get("calc") for it in st.session_state.kpi_plan}
+    st.session_state.kpi_plan += [it for it in _pack_items() if it["calc"] not in have]
+
+
+def _make_plan_inner(df, ctx, use_ai: bool):
+    if use_ai and llm.status()[0]:
         try:
             with st.spinner("AI is choosing KPIs..."):
                 plan, msg = _ai_plan(df, ctx)
@@ -90,7 +116,7 @@ def render():
         _make_plan(df, ctx, use_ai=True)
 
     b1, b2, _ = st.columns([1.3, 1.3, 4])
-    if b1.button("Let AI choose KPIs", disabled=not get_settings().ai_enabled):
+    if b1.button("Let AI choose KPIs", disabled=not llm.status()[0]):
         _make_plan(df, ctx, use_ai=True)
     if b2.button("Use default KPIs"):
         _make_plan(df, ctx, use_ai=False)
@@ -98,6 +124,7 @@ def render():
     if msg:
         getattr(st, kind)(msg)
     _date_warning(df, ctx)
+    _pack_section()
 
     plan = st.session_state.kpi_plan
     valid = [(i, it) for i, it in enumerate(plan) if not K.validate(it, df, ctx)]
@@ -123,6 +150,42 @@ def render():
                 _card(i, k, compact=True)
 
     _builder(df, ctx)
+
+
+def _pack_section():
+    pk = state.pack()
+    if not pk.active:
+        st.caption(f"Delivery-ops pack {pk.reason}.")
+        return
+    m = state.pack_metrics()
+    with st.expander("🚚 Delivery-ops pack: on-time, promise gap, margin per order, hub load", expanded=True):
+        for note in m["notes"]:
+            st.caption(note)
+        heads = m["heads"]
+        for row in range(0, len(heads), 4):
+            cols = st.columns(4)
+            for col, h in zip(cols, heads[row:row + 4]):
+                with col.container(border=True):
+                    st.metric(h.label, D.fmt(h))
+                    st.caption(f"{h.basis} · n = {h.n:,}")
+                    with st.popover("Explain"):
+                        st.markdown(f"- **Formula:** {h.formula}\n- **Filter:** {h.filter}\n- **Rows:** {h.n:,}\n"
+                                    f"- **Basis:** {h.basis}")
+        seg = m["segments"]
+        tabs = st.tabs([f"On-time by {pk.cols[k]}" for k in seg])
+        for t, (k, tbl) in zip(tabs, seg.items()):
+            with t:
+                st.plotly_chart(figure({"type": "bar", "x": pk.cols[k], "y": "on-time %"}, tbl,
+                                       f"On-time % by {pk.cols[k]} (calculated)"), width="stretch", key=f"pk_{k}")
+                st.dataframe(tbl.round(2), hide_index=True, width="stretch")
+        hub = m["hub"]
+        st.markdown("**Hub load model** — reported and calculated figures side by side")
+        st.dataframe(hub["table"], hide_index=True, width="stretch")
+        st.caption(f"Model: {hub['calibration']}. Wait multiplier uses {hub.get('util_basis', '')} utilisation. "
+                   "[reported] = value in the file · [calculated] = computed here · [model] = estimate based on "
+                   "assumptions.")
+        if hub.get("mismatch"):
+            st.warning(hub["mismatch"])
 
 
 def _card(i: int, k: K.KPI, compact: bool = False):

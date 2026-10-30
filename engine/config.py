@@ -17,6 +17,8 @@ class Settings:
     model_fallback: str
     reasoning_fast: str = "off"
     reasoning_smart: str = "low"
+    timeout_s: float = 20.0  # any AI call slower than this is abandoned and the app falls back to rules
+    cooldown_s: float = 60.0  # after a failure, skip AI for this long so every click doesn't wait again
 
     @property
     def ai_enabled(self) -> bool:
@@ -34,4 +36,6 @@ def get_settings() -> Settings:
         model_fallback=env("MODEL_FALLBACK"),
         reasoning_fast=env("REASONING_FAST", "off").lower(),
         reasoning_smart=env("REASONING_SMART", "low").lower(),
+        timeout_s=float(env("AI_TIMEOUT_S", "20") or 20),
+        cooldown_s=float(env("AI_COOLDOWN_S", "60") or 60),
     )

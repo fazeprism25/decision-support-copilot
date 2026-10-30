@@ -6,8 +6,9 @@ import pandas as pd
 import streamlit as st
 
 from engine import kpis as K
-from engine.config import get_settings
+from engine import llm
 from engine.constraints import parse
+from engine.domains import delivery as D
 from engine.scenario import (CapacityChange, MeasureChange, Params, Setup, apply_rows, cascade, change_rows, combine,
                              guess_setup)
 from ui import state
@@ -22,8 +23,8 @@ def setup() -> Setup:
     plan = st.session_state.get("kpi_plan") if st.session_state.get("kpi_plan_for") == st.session_state.dataset_id else None
     if new_data or (plan and not st.session_state.get("setup_used_plan")):  # re-guess once the KPI plan exists
         ctx = state.kpi_ctx()
-        st.session_state.setup = guess_setup(state.clean_df(), ctx.roles, ctx.entity_of, plan or [],
-                                             st.session_state.profile)
+        su = guess_setup(state.clean_df(), ctx.roles, ctx.entity_of, plan or [], st.session_state.profile)
+        st.session_state.setup = D.fill_setup(su, D.detect(state.clean_df(), ctx.roles, ctx.entity_of, su))
         st.session_state.setup_used_plan = bool(plan)
         if new_data:
             st.session_state.setup_for = st.session_state.dataset_id
@@ -125,6 +126,22 @@ def log_change(text: str, interpretation: str, params: Params, before: dict, aft
     log.extend(change_rows(n, datetime.now().strftime("%H:%M:%S"), text, interpretation, params, before, after))
 
 
+def interpret(text: str):
+    df, ctx, s = state.clean_df(), state.kpi_ctx(), setup()
+    return parse(text, df, ctx.roles, s, st.session_state.profile, f"{state.data_hash()}:{text.lower()}",
+                 ctx.entity_of, use_ai=llm.status()[0])
+
+
+def apply_constraint(pend):
+    """Stack a confirmed constraint and log what it moved."""
+    st.session_state.setdefault("constraints", [])
+    before = snapshot(run_scenario(current_params()))
+    after = snapshot(run_scenario(current_params(pend.params)))
+    st.session_state.constraints.append({"text": pend.text, "params": pend.params,
+                                         "interpretation": pend.interpretation, "source": pend.source})
+    log_change(pend.text, pend.interpretation, pend.params, before, after)
+
+
 # ---------- tab ----------
 
 def render():
@@ -136,26 +153,23 @@ def render():
     with st.form("constraint", clear_on_submit=True):
         text = st.text_input("Type a constraint card, e.g. 'Hub H02 is down for 3 days', 'fee rise capped at 5%', "
                              "'ignore cancelled orders'")
-        go = st.form_submit_button("Interpret", disabled=not get_settings().ai_enabled)
-    if not get_settings().ai_enabled:
-        st.caption("Typed constraints need AI (off). The sidebar sliders work without it.")
+        go = st.form_submit_button("Interpret")
+    ai_ok, ai_msg = llm.status()
+    if not ai_ok:
+        st.caption(f"AI-down mode: common wordings are parsed by rules; others need AI. ({ai_msg})")
     if go and text.strip():
         with st.spinner("Translating constraint into parameters..."):
-            st.session_state.pending = parse(text.strip(), df, ctx.roles, s, st.session_state.profile,
-                                             f"{st.session_state.dataset_id}:{text.strip().lower()}")
+            st.session_state.pending = interpret(text.strip())
     pend = st.session_state.get("pending")
     if pend:
         with st.container(border=True):
             if pend.ok:
-                st.markdown(f"**Proposed:** {pend.interpretation}")
+                st.markdown(f"**Proposed** ({'rule-based parser' if pend.source == 'rules' else 'AI parser'}): "
+                            f"{pend.interpretation}")
                 st.json(pend.params.model_dump(exclude_defaults=True))
                 c1, c2, _ = st.columns([1, 1, 4])
                 if c1.button("✅ Apply", type="primary"):
-                    before = snapshot(run_scenario(current_params()))
-                    after = snapshot(run_scenario(current_params(pend.params)))
-                    st.session_state.constraints.append({"text": pend.text, "params": pend.params,
-                                                         "interpretation": pend.interpretation})
-                    log_change(pend.text, pend.interpretation, pend.params, before, after)
+                    apply_constraint(pend)
                     st.session_state.pending = None
                     st.rerun()
                 if c2.button("Discard"):
@@ -182,6 +196,7 @@ def render():
 
     params = current_params()
     res = run_scenario(params)
+    st.session_state.scenario_res = (params, res)
     if st.button("Record current slider settings in the Change Log"):
         sp = st.session_state.get("slider_params", Params())
         before = snapshot(run_scenario(combine([c["params"] for c in st.session_state.constraints])))
@@ -201,6 +216,9 @@ def render():
         for c in ("baseline", "scenario", "change"):
             steps[c] = steps[c].map(lambda v: f"{v:,.2f}" if isinstance(v, (int, float, np.floating)) and pd.notna(v) else "")
         st.dataframe(steps, hide_index=True, width="stretch")
+        if len(casc.get("targets", [])):
+            st.markdown("**Targets**")
+            st.dataframe(casc["targets"], hide_index=True, width="stretch")
         st.caption(f"Period {casc['days']} days" + (f", capacity change on {casc['affected_days']:g} of them"
                                                      if casc["affected_days"] else "") +
                    f" · load basis: {casc['basis']} · {casc['calibration']}. "

@@ -5,10 +5,14 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from engine import llm
 from engine.config import get_settings
+from engine.domains import delivery as D
 from engine.loader import file_hash, list_sheets, load_table
 from engine.profile import profile_frame
 from engine.roles import ROLE_HELP, ROLES, check_role, detect_roles, entity_attributes, schema_report
+from engine.valuemap import from_table, map_value, remap_plan, to_table
+from ui import state
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CHECK_ICON = {"ok": "✅ ok", "warn": "⚠️ warn", "fail": "❌ fail"}
@@ -29,11 +33,11 @@ def _load(data: bytes, name: str, sheet, header_row):
 def _pick_source() -> tuple[bytes, str] | None:
     samples = sorted(p.name for p in DATA_DIR.glob("*") if p.suffix.lower() in (".csv", ".xlsx", ".xlsm", ".xls"))
     options = ["Upload a file"] + (["Use a file from the data folder"] if samples else [])
-    src = st.radio("Data source", options, horizontal=True, label_visibility="collapsed")
+    src = st.radio("Data source", options, horizontal=True, label_visibility="collapsed", key="src")
     if src == "Upload a file":
         up = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xlsm", "xls"])
         return (up.getvalue(), up.name) if up else None
-    name = st.selectbox("File in data folder", samples)
+    name = st.selectbox("File in data folder", samples, key="src_file")
     return (DATA_DIR / name).read_bytes(), name
 
 
@@ -44,6 +48,8 @@ def _reset_for(dataset_id: str, df: pd.DataFrame):
     st.session_state.roles_version = 0
     st.session_state.fixes = []
     st.session_state.qa_history = []
+    for k in ("vmap", "vmap_prop", "vmap_msg", "pending", "scenario_res", "rec_cache"):
+        st.session_state.pop(k, None)
 
 
 def _apply_edits(edited: pd.DataFrame):
@@ -82,6 +88,7 @@ def render():
         _reset_for(dataset_id, df)
     st.session_state.df = df
     st.session_state.load_info = info
+    st.session_state.file_name = name
 
     m = st.columns(4)
     m[0].metric("Rows", f"{info.n_rows:,}")
@@ -99,6 +106,9 @@ def render():
         st.dataframe(head.astype({c: "string" for c in mixed}), width="stretch")
 
     _roles_section(df)
+    from ui import demo
+
+    demo.finish()
 
 
 def _roles_section(df: pd.DataFrame):
@@ -152,3 +162,83 @@ def _roles_section(df: pd.DataFrame):
         st.caption("These columns repeat one value per group, so they describe the group, not each row. "
                    "Later phases will not sum them across rows.")
         st.dataframe(attrs, hide_index=True, width="stretch")
+
+    _value_mapping_section()
+
+
+def _propose():
+    df, ctx = state.fixed_df(), state.kpi_ctx()
+    rules = D.propose_mapping_rules(df, ctx.roles)
+    msg = "Proposed by rules (pack vocabulary)."
+    ok, why = llm.status()
+    if ok:
+        try:
+            with st.spinner("AI is proposing standard labels..."):
+                rules = D.merge_proposals(rules, D.propose_mapping_ai(df, ctx.roles, state.data_hash()))
+            msg = "Proposed by AI + rules; every label is checked against the standard vocabulary."
+        except llm.LLMError as e:
+            msg = f"AI proposal unavailable, rules only. ({str(e)[:120]})"
+    else:
+        msg += f" AI not used: {why}"
+    st.session_state.vmap_prop = to_table(rules[0], df, rules[1])
+    st.session_state.vmap_msg = msg
+
+
+def _remap(col, v, old: dict, new: dict):
+    inv = {lab: raw for raw, lab in old.get(col or "", {}).items()}
+    return map_value(col, inv.get(v, v), new)
+
+
+def confirm_vmap(new: dict):
+    """Apply a confirmed mapping everywhere: KPI plan labels, What-if setup and stacked constraints follow."""
+    old = state.vmap()
+    if st.session_state.get("kpi_plan"):
+        inv_plan = remap_plan(st.session_state.kpi_plan, {c: {lab: raw for raw, lab in m.items()} for c, m in old.items()})
+        st.session_state.kpi_plan = remap_plan(inv_plan, new)
+    for c in st.session_state.get("constraints", []):
+        for x in c["params"].exclusions:
+            x.value = [_remap(x.column, v, old, new) for v in x.value] if isinstance(x.value, list) else                 _remap(x.column, x.value, old, new)
+        for t in c["params"].targets:
+            if t.segment_column:
+                t.segment_value = _remap(t.segment_column, t.segment_value, old, new)
+    st.session_state.vmap = new
+    st.session_state.setup_used_plan = False  # re-derive What-if setup (completed labels) from the mapped data
+
+
+def _value_mapping_section():
+    st.subheader("Category value mapping (C01)")
+    st.caption("Different departments use different labels (P1/P2/P3, completed/rto, Y/Yes). Map them to standard "
+               "labels once; after you confirm, every tab uses the standard labels.")
+    key = (st.session_state.dataset_id, state.fixes_sig(), state.roles_sig())
+    if st.session_state.get("vmap_prop") is None or st.session_state.get("vmap_prop_for") != key:
+        _propose()
+        st.session_state.vmap_prop_for = key
+    prop = st.session_state.vmap_prop
+    if not len(prop):
+        st.caption("No category column matches a standard vocabulary (priority, order status, peak flag), so no "
+                   "mapping is needed.")
+    else:
+        st.caption(st.session_state.get("vmap_msg", ""))
+        edited = st.data_editor(prop, hide_index=True, width="stretch", key=f"vm_{st.session_state.dataset_id}",
+                                disabled=["column", "original value", "rows", "source"],
+                                column_config={"standard label": st.column_config.TextColumn(
+                                    "standard label", help="Edit freely; leave blank to keep the original value. "
+                                    "Standard: " + "; ".join(f"{k}: {', '.join(v)}" for k, v in D.VOCAB.items()))})
+        c1, c2, c3, _ = st.columns([1.4, 1.2, 1.4, 3])
+        if c1.button("✅ Confirm mapping", type="primary"):
+            confirm_vmap(from_table(edited))
+            st.rerun()
+        if c2.button("Clear mapping", disabled=not state.vmap()):
+            confirm_vmap({})
+            st.rerun()
+        if c3.button("Propose again"):
+            _propose()
+            st.rerun()
+        if state.vmap():
+            n = sum(1 for m in state.vmap().values() for k, v in m.items() if v != k)
+            st.success(f"Mapping confirmed: {n} value(s) relabelled. KPIs, Ask, What-if and Recommendations use the "
+                       "standard labels." if n else "Mapping confirmed: the labels are already standard.")
+        else:
+            st.warning("Mapping not confirmed yet: all tabs still use the original labels.")
+    pk = state.pack()
+    (st.info if pk.active else st.caption)(f"Delivery-ops pack {pk.reason}.")

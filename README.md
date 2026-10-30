@@ -45,4 +45,4 @@ Sidebar buttons: **Reset everything** and **Load demo scenario**.
 - `engine/` – generic calculations (no dataset-specific names allowed)
 - `ui/` – tab rendering code
 - `tests/` – automated checks
-- `data/` – put sample files here (e.g. `Round_1_BUDS.xlsx`)
+- `data/` – sample files. The competition files (`Round_1_BUDS.xlsx`, `BUDS_unknown_schema_test.csv`) are not in this repo; put them in `data/` to enable **Load demo data** and the tests that use them (those tests skip otherwise).

@@ -7,3 +7,8 @@ __pycache__/
 sessions/
 .env.*
 !.env.example
+
+# competition files: kept locally, not published
+data/Round_1_BUDS.xlsx
+data/BUDS_unknown_schema_test.csv
+new data

@@ -131,6 +131,10 @@ def test_unrelated_datasets_run_with_pack_off(name):
 
 
 def test_demo_and_reset_buttons():
+    from ui import demo
+
+    if not demo.available():
+        pytest.skip(f"demo file data/{demo.DEMO_FILE} not present")
     at = _app()
     next(b for b in at.sidebar.button if b.label == "Load demo data").click().run()
     assert not at.exception, [e.message for e in at.exception]

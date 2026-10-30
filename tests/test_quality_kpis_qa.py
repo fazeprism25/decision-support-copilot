@@ -82,7 +82,7 @@ def test_margin_and_on_time(setup):
     assert m.value == pytest.approx((df["Delivery_Fee"] - df["Delivery_Cost"]).sum())
     o = K.run({"calc": "on_time_rate", "params": {"actual": "Actual_Time_min", "promised": "Promised_Time_min",
                                                   "status": "Order_Status", "completed_values": ["Delivered"]}}, df, ctx)
-    d = df[df["Order_Status"] == "Delivered"]
+    d = df[(df["Order_Status"] == "Delivered") & (df["Actual_Time_min"] > 0)]
     assert o.value == pytest.approx(100 * (d["Actual_Time_min"] <= d["Promised_Time_min"]).mean())
     assert "Delivered" in o.filter
 
@@ -149,3 +149,40 @@ def test_extract_code_and_auto_chart():
     assert extract_code("text\n```python\nresult = 1\n```\nmore") == "result = 1"
     chart, tbl = auto_chart(pd.Series([3, 1], index=pd.Index(["a", "b"], name="g"), name="n"))
     assert chart == {"type": "bar", "x": "g", "y": "n"} and len(tbl) == 2
+
+
+# ---------- unknown-schema acceptance test (renamed BUDS columns, messy formats) ----------
+
+def test_buds_unknown_schema_targets():
+    from pathlib import Path
+
+    from engine.loader import load_table
+
+    path = Path(__file__).resolve().parent.parent / "data" / "BUDS_unknown_schema_test.csv"
+    if not path.exists():
+        pytest.skip("data/BUDS_unknown_schema_test.csv not present")
+    df, _ = load_table(path.read_bytes(), path.name)
+    roles, _ = detect_roles(df, "unknown-schema", use_ai=False)
+    ent = entity_attributes(df, roles)
+    role = dict(zip(roles["column"], roles["role"]))
+    ids = [c for c, r in role.items() if r == "id"]
+    assert len(ids) == 1
+    dup = next(i for i in find_issues(df, roles, set(ent["attribute"])) if i.rule == "duplicate_id")
+    df = apply_fix(df, Fix(dup.key, dup.rule, dup.column, "drop_duplicates", {}))
+    assert len(df) == 2000
+    ctx = K.Ctx({c: r for c, r, k in zip(roles["column"], roles["role"], roles["check"]) if k != "fail"},
+                dict(zip(ent["attribute"], ent["entity"])))
+    durs = [c for c, r in role.items() if r == "duration"]
+    assert len(durs) == 2  # promised + actual, one stored as text like "32 min"
+    # column choice is the AI's job; here we pass it explicitly like a confirmed plan would
+    promised = next(c for c in durs if df[c].astype("string").str.contains("min").any())
+    actual = next(c for c in durs if c != promised)
+    status = next(c for c, r in role.items() if r == "category" and "completed" in set(df[c].dropna()))
+    o = K.run({"calc": "on_time_rate", "params": {"actual": actual, "promised": promised, "status": status,
+                                                  "completed_values": ["completed"]}}, df, ctx)
+    assert "1,817 valid" in o.denominator and round(o.value, 1) == 20.7
+    money = [c for c, r in role.items() if r == "money" and c not in ctx.entity_of]
+    fee = next(c for c in money if "charge" in c)
+    cost = next(c for c in money if "cost" in c)
+    m = K.run({"calc": "margin", "params": {"revenue": fee, "cost": cost}}, df, ctx)
+    assert round(m.value / 2000, 2) == -5.50 and "per record = -5.50" in m.extra

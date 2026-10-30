@@ -23,7 +23,7 @@ NUMERIC_ROLES = {"money", "quantity", "duration", "rating", "measure"}
 
 _HINTS = {
     "id": r"(^|_|\b)(id|code|no|num|number|key|ref|sku)($|_|\b)",
-    "money": r"price|cost|fee|revenue|amount|sales|salary|profit|margin|value|charge|pay|income|spend|discount|tip|wage|bonus",
+    "money": r"price|cost|fee|revenue|amount|sales|salary|profit|margin|value|charge|pay|income|spend|discount|tip|wage|bonus|(^|_)(rs|inr|usd|eur|gbp|amt)($|_)",
     "duration": r"time|min|mins|minute|hours|hrs|duration|days|sec|lead|eta|delay|sla|tat|tenure|wait",
     "rating": r"rating|score|stars|csat|nps|satisfaction|review",
     "quantity": r"qty|quantity|count|units|items|orders|pieces|volume|headcount|capacity",
@@ -45,11 +45,17 @@ def rule_role(name: str, p: dict) -> tuple[str, str]:
         return "ignore", "single constant value"
     if p["date_rate"] >= 0.8:
         return "date", f"{p['date_rate']:.0%} of values parse as dates/times"
+    if p.get("yes_no_like"):
+        return "flag", "values are yes/no style"
     if p["n_unique"] <= 2 and p.get("avg_len", 0) <= 12:
         return "flag", f"only {p['n_unique']} distinct values"
     if p["numeric_rate"] >= 0.9:
         if _hint(name, "id") and p["integer_like"] and p["unique_ratio"] >= 0.8:
             return "id", "integer values, mostly unique, name suggests an identifier"
+        if p.get("currency_symbol"):
+            return "money", "values carry a currency symbol"
+        if p.get("unit") in ("min", "mins", "m", "h", "hr", "hrs", "hour", "hours", "sec", "s", "d", "day", "days"):
+            return "duration", f"values carry the time unit '{p['unit']}'"
         for role in ("rating", "money", "duration", "quantity"):
             if _hint(name, role):
                 if role == "rating" and not (p["n_unique"] <= 21 and p["min"] >= 0):
@@ -91,7 +97,7 @@ def check_role(role: str, p: dict, name: str = "") -> tuple[str, str]:
             return "warn", f"{p['share_negative']:.1%} negative values"
         return "ok", ""
     if role == "flag":
-        k = p.get("n_unique_normalized", p["n_unique"])
+        k = 2 if p.get("yes_no_like") else p.get("n_unique_normalized", p["n_unique"])
         if k > 3:
             return "fail", f"{k} distinct values; a flag should have 2"
         return ("warn", f"{k} distinct values (inconsistent spelling?)") if k == 3 else ("ok", "")
@@ -111,7 +117,8 @@ class _Label(BaseModel):
 
 def _llm_prompt(df: pd.DataFrame, prof: dict) -> str:
     keep = ("dtype", "missing_pct", "n_unique", "unique_ratio", "numeric_rate", "date_rate",
-            "min", "max", "mean", "integer_like", "avg_len", "top_values", "examples")
+            "min", "max", "mean", "integer_like", "avg_len", "top_values", "examples", "unit",
+            "currency_symbol", "percent_sign", "yes_no_like", "date_order")
     stats = {c: {k: v for k, v in p.items() if k in keep} for c, p in prof.items()}
     roles = "\n".join(f"- {r}: {h}" for r, h in ROLE_HELP.items())
     return (

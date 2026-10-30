@@ -204,7 +204,9 @@ def margin(df, ctx, revenue, cost):
     m = float((r[ok] - c[ok]).sum())
     rev = float(r[ok].sum())
     return KPI(f"Margin ({revenue} − {cost})", m, formula=f"sum('{revenue}' − '{cost}') over rows with both",
-               denominator=f"{int(ok.sum()):,} rows", extra=f"margin % = {100 * m / rev:.1f}% of {revenue}" if rev else "",
+               denominator=f"{int(ok.sum()):,} rows",
+               extra=(f"per record = {m / ok.sum():,.2f}" if ok.any() else "") +
+                     (f" · margin % = {100 * m / rev:.1f}% of {revenue}" if rev else ""),
                exclusions=[f"{int((~ok).sum()):,} rows missing either value excluded"] if (~ok).any() else [])
 
 
@@ -215,14 +217,16 @@ def on_time_rate(df, ctx, actual, promised, status=None, completed_values=None):
     if status and completed_values:
         mask = df[status].astype("string").isin([str(v) for v in completed_values])
         filt = f"'{status}' in {list(completed_values)}"
-    base = mask & a.notna() & p.notna()
+    has_both = mask & a.notna() & p.notna()
+    base = has_both & (a > 0)  # a completed record cannot take 0 minutes: treat as invalid, not as on time
     hit = int((a[base] <= p[base]).sum())
     n = int(base.sum())
     return KPI("On-time rate", 100 * hit / n if n else None, "pct",
-               formula=f"rows where '{actual}' ≤ '{promised}' ÷ eligible rows", filter=filt,
-               denominator=f"{n:,} eligible rows ({hit:,} on time)",
-               exclusions=[f"{int((mask & ~base).sum()):,} eligible-status rows missing a time excluded",
-                           f"{int((~mask).sum()):,} rows not in the completed status excluded"])
+               formula=f"rows where '{actual}' ≤ '{promised}' ÷ valid eligible rows", filter=filt,
+               denominator=f"{n:,} valid eligible rows ({hit:,} on time)",
+               exclusions=[f"{int((~mask).sum()):,} rows not in the completed status excluded",
+                           f"{int((mask & ~has_both).sum()):,} completed rows missing a time excluded",
+                           f"{int((has_both & ~base).sum()):,} completed rows with '{actual}' ≤ 0 excluded as invalid"])
 
 
 def distribution(df, ctx, col):
@@ -374,9 +378,9 @@ def plan_prompt(columns: list[dict]) -> str:
         "Choose the 8-14 most decision-relevant KPIs and charts for this dataset from the calculation catalog.\n"
         f"Catalog:\n{catalog_for_prompt()}\n\nColumns (role, meaning, distinct values, top labels):\n"
         f"{json.dumps(columns, default=str)}\n\n"
-        "Rules: use only catalog calculations and exact column names; never invent numbers; use margin only when a "
-        "revenue/fee column and a cost column describe the SAME thing (e.g. fee charged for a service vs cost of "
-        "that service; not the value of goods vs a service cost); prefer on_time_rate when actual and promised durations exist (use the "
+        "Rules: use only catalog calculations and exact column names; never invent numbers. MARGIN means the fee or "
+        "charge for an activity minus the cost of that SAME activity (e.g. delivery/shipping fee − delivery cost). "
+        "NEVER use order/basket/goods value as revenue for margin; prefer on_time_rate when actual and promised durations exist (use the "
         "status column and its completed label(s) if present). Give each a short business title.\n"
         'Return ONLY JSON: {"kpis": [{"calc": "...", "params": {...}, "title": "..."}]}'
     )

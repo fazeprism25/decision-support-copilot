@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 
 import pandas as pd
 
-from engine.profile import to_datetime_clean, to_numeric_clean
+from engine.profile import to_datetime_clean, to_numeric_clean, yes_no
 
 MEASURE_ROLES = {"money", "quantity", "duration", "measure"}
 GROUP_ROLES = {"category", "location", "flag"}
@@ -74,15 +74,32 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(s).lower())
 
 
-def spelling_groups(values: pd.Series) -> dict[str, str]:
-    """Map each variant to the most common spelling of its group (same after normalising, or >= 0.9 similar)."""
+def spelling_groups(values: pd.Series, yes_no_flag: bool = False) -> dict[str, str]:
+    """Map each variant to the most common spelling of its group (same after normalising, or >= 0.9 similar).
+    Values whose digits differ are never merged ('16 min' vs '116 min'). For yes/no flags, synonyms merge."""
     counts = values.dropna().astype("string").value_counts()
     if len(counts) > 300:
         return {}
     canon: dict[str, str] = {}
     reps: list[str] = []  # most common first
+    if yes_no_flag:
+        for v in counts.index:
+            first = next((r for r in reps if yes_no(r) == yes_no(v)), None)
+            if first is None:
+                reps.append(v)
+            else:
+                canon[v] = first
+        return canon
+    digits = lambda x: re.sub(r"\D", "", str(x))
     for v in counts.index:
         n = _norm(v)
+        if digits(v):
+            match = next((r for r in reps if _norm(r) == n), None)
+            if match is None:
+                reps.append(v)
+            elif v != match:
+                canon[v] = match
+            continue
         match = next((r for r in reps if _norm(r) == n or
                       (len(n) > 3 and difflib.SequenceMatcher(None, _norm(r), n).ratio() >= 0.9) or
                       # rare abbreviation of a common label, e.g. 'ABC-E' next to 'ABC-EAST'
@@ -167,7 +184,7 @@ def find_issues(df: pd.DataFrame, roles: pd.DataFrame, entity_cols: set[str] = f
                                     severity="high"))
 
         if r in GROUP_ROLES:
-            canon = spelling_groups(s)
+            canon = spelling_groups(s, yes_no_flag=r == "flag" and s.dropna().map(yes_no).notna().all())
             if canon:
                 rows = int(s.isin(list(canon)).sum())
                 ex = "; ".join(f"'{a}' → '{b}'" for a, b in list(canon.items())[:4])

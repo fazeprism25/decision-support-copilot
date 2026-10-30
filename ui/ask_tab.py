@@ -23,8 +23,15 @@ def render():
         go = st.form_submit_button("Ask")
     if go and q.strip():
         df = state.clean_df()
-        notes = (f"Note: {len(st.session_state.fixes)} data-quality fix(es) have already been applied to df."
+        notes = (f"Note: {len(st.session_state.fixes)} data-quality fix(es) have already been applied to df.
+"
                  if st.session_state.get("fixes") else "")
+        open_issues = [i.detail for i in state.issues() if i.severity != "low"]
+        if open_issues:  # so answers use the same validity rules as the KPIs
+            notes += ("Known data-quality issues still in df (exclude invalid rows, e.g. repeated IDs, zero durations, "
+                      "out-of-scale values, and say so in `method`):
+- " + "
+- ".join(open_issues[:12]))
         schema = schema_text(df, state.role_map(), state.meanings(), st.session_state.profile)
         with st.spinner("Writing and running code (free models can take 30-60s)..."):
             st.session_state.qa_history.insert(0, ask(q.strip(), df, schema, notes))

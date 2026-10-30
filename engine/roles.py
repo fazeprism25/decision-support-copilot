@@ -213,3 +213,43 @@ def entity_attributes(df: pd.DataFrame, roles: pd.DataFrame, min_consistency: fl
                               "meaning": f"'{col}' is a property of each '{ent}', not of each row"})
                 break
     return pd.DataFrame(found, columns=["attribute", "entity", "groups", "consistency_%", "meaning"])
+
+
+def how_parsed(p: dict) -> str:
+    if p.get("time_of_day"):
+        return "time of day"
+    if p["date_rate"] >= 0.8:
+        return "date/time" + (f", {p['date_order']} order" if p.get("date_order") else "")
+    if p["numeric_rate"] >= 0.9:
+        bits = ["number"]
+        if p.get("currency_symbol"):
+            bits.append("currency symbol removed")
+        if p.get("percent_sign"):
+            bits.append("% sign removed")
+        if p.get("unit"):
+            bits.append(f"unit '{p['unit']}' removed")
+        if not p["dtype"].startswith(("int", "float")):
+            bits.append("read from text")
+        return ", ".join(bits)
+    if p.get("yes_no_like"):
+        return "text, yes/no values"
+    return "text"
+
+
+def schema_report(roles: pd.DataFrame, prof: dict) -> pd.DataFrame:
+    """C01: original column -> role -> how parsed -> confidence, with unmapped columns flagged."""
+    rows = []
+    for r in roles.itertuples():
+        unmapped = r.role == "ignore" or r.check == "fail"
+        if r.source == "user":
+            conf = "confirmed by user"
+        elif unmapped or r.check == "warn" or r.source == "rules (AI rejected)":
+            conf = "low"
+        elif r.source == "AI":
+            conf = "high"
+        else:
+            conf = "medium"
+        rows.append({"original column": r.column, "role": "UNMAPPED" if unmapped else r.role,
+                     "how parsed": how_parsed(prof[r.column]), "confidence": conf,
+                     "meaning": r.meaning, "why": r.note})
+    return pd.DataFrame(rows)

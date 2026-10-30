@@ -3,14 +3,11 @@ import streamlit as st
 
 from engine.config import get_settings
 from engine.llm import LLMError, chat
-from ui import ask_tab, data_tab, kpi_tab, quality_tab, state
+from ui import ask_tab, data_tab, kpi_tab, quality_tab, state, whatif_tab
 
 st.set_page_config(page_title="Decision Support", layout="wide")
 
 settings = get_settings()
-
-if "change_log" not in st.session_state:
-    st.session_state.change_log = []
 
 with st.sidebar:
     st.title("Decision Support")
@@ -25,7 +22,10 @@ with st.sidebar:
                 st.error(f"AI call failed: {e}")
     else:
         st.warning("AI off: no LLM_API_KEY in .env. Profiling, KPIs, charts and sliders still work.")
-    st.caption("Scenario sliders will appear here (Phase 6).")
+    if state.has_data():
+        whatif_tab.sidebar()
+    else:
+        st.caption("What-if sliders appear here once data is loaded.")
 
 TABS = ["Data", "Quality", "KPIs", "Ask", "What-if", "Recommendations", "Explain", "Change Log"]
 PLANNED = {
@@ -39,7 +39,8 @@ PLANNED = {
     "Change Log": "Every constraint applied and how each KPI moved (Phase 6).",
 }
 
-BUILT = {"Quality": quality_tab, "KPIs": kpi_tab, "Ask": ask_tab}
+BUILT = {"Quality": quality_tab.render, "KPIs": kpi_tab.render, "Ask": ask_tab.render,
+         "What-if": whatif_tab.render, "Change Log": whatif_tab.render_changelog}
 
 for tab, name in zip(st.tabs(TABS), TABS):
     with tab:
@@ -49,10 +50,8 @@ for tab, name in zip(st.tabs(TABS), TABS):
             continue
         if name in BUILT:
             if state.has_data():
-                BUILT[name].render()
+                BUILT[name]()
             else:
                 st.info("Load a dataset in the Data tab first.")
             continue
         st.info(PLANNED[name])
-        if name == "Change Log" and not st.session_state.change_log:
-            st.caption("No changes recorded yet.")

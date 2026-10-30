@@ -8,7 +8,7 @@ import streamlit as st
 from engine.config import get_settings
 from engine.loader import file_hash, list_sheets, load_table
 from engine.profile import profile_frame
-from engine.roles import ROLE_HELP, ROLES, check_role, detect_roles, entity_attributes
+from engine.roles import ROLE_HELP, ROLES, check_role, detect_roles, entity_attributes, schema_report
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CHECK_ICON = {"ok": "✅ ok", "warn": "⚠️ warn", "fail": "❌ fail"}
@@ -136,6 +136,12 @@ def _roles_section(df: pd.DataFrame):
                  "Calculations will skip these until fixed.")
     counts = roles["role"].value_counts()
     st.caption("Roles found: " + ", ".join(f"{r} × {n}" for r, n in counts.items()))
+
+    rep = schema_report(roles, st.session_state.profile)
+    unmapped = rep[rep["role"] == "UNMAPPED"]
+    with st.expander(f"Schema mapping report ({len(rep) - len(unmapped)} mapped, {len(unmapped)} unmapped)"):
+        st.dataframe(rep, hide_index=True, width="stretch")
+        st.download_button("Download report (CSV)", rep.to_csv(index=False).encode(), "schema_mapping_report.csv")
 
     st.subheader("Entity attributes")
     attrs = entity_attributes(df, roles)

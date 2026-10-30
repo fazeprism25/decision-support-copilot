@@ -1,7 +1,7 @@
 # 5-minute demo script
 
 Before you start (once, 10 minutes before):
-1. Double-click `run.bat`. The app opens at http://localhost:8501.
+1. Double-click `START HERE - Windows.bat` (Mac: `START HERE - Mac.command`). The app opens at http://localhost:8501.
 2. Sidebar: click **Test AI connection**. "Model replied: OK" = AI on. If it fails, carry on: everything below
    except new typed questions works without AI (the sidebar says **AI-down mode**).
 3. Click **▶️ Load demo scenario** once, open each tab so answers are warmed up, then click **🔄 Reset everything**.
@@ -31,6 +31,6 @@ Judges' own file: **Data** tab → *Upload a file* → choose it. Then follow th
 | An AI step spins | It stops by itself after 20 s and the app falls back to rules. |
 | A constraint is refused | Read the reason and the "Try:" suggestion, then retype it that way. Examples that always work: `<hub> is down for 3 days`, `capacity cut by 20% across all hubs`, `fee increase capped at 5%`, `ignore cancelled orders`, `<label> orders must reach 80% on time`, `<cost column> rises 10%`. |
 | Wrong numbers after many changes | Sidebar → **🔄 Reset everything**, then **▶️ Load demo scenario**. |
-| Screen frozen or error page | Press **R** in the browser (rerun). Still stuck: close the terminal, double-click `run.bat` again, then **Load demo scenario**. |
+| Screen frozen or error page | Press **R** in the browser (rerun). Still stuck: close the terminal, double-click `START HERE - Windows.bat` again, then **Load demo scenario**. |
 | A wrong column role | Data tab → change the **role** in the table. Every tab updates. |
 | Uploaded file shows a title row as the header | Data tab → change **Header row**. |

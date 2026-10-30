@@ -2,27 +2,24 @@
 
 Upload any CSV/Excel file → quality checks, KPIs, charts, Q&A, what-if scenarios, recommendations.
 
-## Setup and run: Windows
-Open PowerShell in this folder and run once (needs Python 3.11+):
-```
-py -V:Astral/CPython3.11.15 -m venv .venv      # or: py -3.11 -m venv .venv (python.org install)
-.venv\Scripts\python -m pip install -r requirements.txt
-copy .env.example .env
-```
-Open `.env` in Notepad and paste your API key after `LLM_API_KEY=` (DeepSeek by default; other providers
-are described inside the file). Then double-click `run.bat`, or run `.venv\Scripts\streamlit run app.py`.
+## Install and open the app (Windows or Mac)
+1. Download this project: green **Code** button at the top of the GitHub page → **Download ZIP**, then unzip it
+   (Windows: right-click → **Extract All**; Mac: double-click the ZIP).
+2. Open the unzipped folder and double-click:
+   - **Windows:** `START HERE - Windows.bat`
+     If a blue "Windows protected your PC" box appears: click **More info** → **Run anyway**.
+   - **Mac:** `START HERE - Mac.command`
+     The first time, Mac may say it "cannot be opened": instead **right-click** the file → **Open** → **Open**.
+3. The first time, it asks for an AI key: paste a DeepSeek key
+   ([get one here](https://platform.deepseek.com/api_keys)) and press Enter. It checks the key with DeepSeek and
+   asks again if it's wrong. No key? Just press Enter: the app works without AI.
+4. Then it downloads Python and everything the app needs by itself (a few minutes, needs internet).
+5. The app opens in your browser. Keep the black window open while you use it; close it to stop the app.
 
-## Setup and run: Mac
-Needs Python 3.11+ (`python3 --version`; if older, `brew install python@3.11`). In Terminal, in this folder:
-```
-chmod +x run.sh
-./run.sh
-```
-The first run installs everything and creates `.env`, then stops so you can paste your API key into it.
-Run `./run.sh` again to start the app.
+Next time, double-click the same file: it skips everything already done and opens the app in seconds.
 
-The browser opens at http://localhost:8501. Stop with Ctrl+C in the terminal.
-Without a key the app still works: AI features switch off and rules take over.
+**Add or change the AI key later:** double-click `Change AI Key - Windows.bat` (Mac: `Change AI Key - Mac.command`),
+paste the key, then restart the app.
 
 ## Run the tests
 ```

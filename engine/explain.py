@@ -1,4 +1,4 @@
-"""Explain tab content, generated from the objects the app actually ran on the current dataset (roles, fixes,
+"""Explain page content, generated from the objects the app actually ran on the current dataset (roles, fixes,
 value mapping, KPI results, domain pack, scenario, recommendations). Nothing here is fixed prose about a dataset."""
 from dataclasses import dataclass, field
 
@@ -26,7 +26,7 @@ def build(*, name: str, rows_raw: int, rows_clean: int, roles: pd.DataFrame, ent
 
     s = Section("1. Data used")
     s.lines.append(f"File **{name}**: {rows_raw:,} rows uploaded → **{rows_clean:,} rows after quality fixes** "
-                   f"({rows_raw - rows_clean:,} removed). Every tab (KPIs, Ask, What-if, Recommendations) uses these "
+                   f"({rows_raw - rows_clean:,} removed). Every page (KPIs, Ask, What-if, Recommendations) uses these "
                    "cleaned rows.")
     if fixes:
         s.table = pd.DataFrame([{"step": i + 1, "column": f.column, "rule": f.rule, "action": FIX_LABELS.get(f.action, f.action),
@@ -68,7 +68,7 @@ def build(*, name: str, rows_raw: int, rows_clean: int, roles: pd.DataFrame, ent
                                  "excluded": "; ".join(k.exclusions), "warnings": "; ".join(k.warnings)}
                                 for k in kpis])
     else:
-        s.lines.append("Open the KPIs tab once to compute KPIs.")
+        s.lines.append("Open the KPIs page once to compute KPIs.")
     out.append(s)
 
     s = Section("5. Delivery-operations pack")
@@ -157,6 +157,6 @@ def build(*, name: str, rows_raw: int, rows_clean: int, roles: pd.DataFrame, ent
             s.lines.append(f"- {n}")
         s.table = route["components"][["component", "status", "source", "formula"]]
     else:
-        s.lines.append("Not computed: set a route grouping and a base cost column on the Route cost tab.")
+        s.lines.append("Not computed: set a route grouping and a base cost column on the Route cost page.")
     out.append(s)
     return out

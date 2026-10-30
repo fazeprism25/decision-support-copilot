@@ -126,6 +126,7 @@ def test_route_tab_in_app_logs_constraint(routes):
     at.radio(key="src").set_value("Use a file from the data folder").run()
     at.selectbox(key="src_file").set_value(ROUTES.name).run()
     assert not at.exception, [e.message for e in at.exception]
+    at.radio(key="page").set_value("Route cost").run()
     assert any("Fragile" in w.value for w in at.warning)
     box = next(t for t in at.text_input if t.label.startswith("Type a cost card"))
     box.input("Exclude unverified costs")
@@ -134,4 +135,5 @@ def test_route_tab_in_app_logs_constraint(routes):
     assert not at.exception, [e.message for e in at.exception]
     log = pd.DataFrame(at.session_state["change_log"])
     assert "Route · cheapest (decision view)" in set(log["metric"])
+    at.radio(key="page").set_value("Explain").run()
     assert "9. Route cost (cost analytics)" in [e.label for e in at.expander]

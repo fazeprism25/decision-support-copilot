@@ -19,12 +19,13 @@ from engine.roles import detect_roles  # noqa: E402
 
 def timed(name, fn):
     llm.reset()
-    t = time.perf_counter()
+    t, u0 = time.perf_counter(), llm.usage()
     try:
-        out = fn()
-        return name, time.perf_counter() - t, "ok", out
+        out, status = fn(), "ok"
     except Exception as e:  # report, keep measuring the rest
-        return name, time.perf_counter() - t, f"FAILED: {str(e)[:140]}", None
+        out, status = None, f"FAILED: {str(e)[:140]}"
+    u1 = llm.usage()
+    return name, time.perf_counter() - t, status, out, {k: u1[k] - u0[k] for k in u1}
 
 
 def main(path):
@@ -71,9 +72,13 @@ def main(path):
             raise RuntimeError(msg)
         return msg
     rows.append(timed("Recommendation wording (fast)", rewrite))
-    print("\n| AI step | seconds | result |\n|---|---:|---|")
-    for name, secs, status, _ in rows:
-        print(f"| {name} | {secs:.1f} | {status} |")
+    print("\n| AI step | seconds | requests | input tok | (cached) | output tok | result |"
+          "\n|---|---:|---:|---:|---:|---:|---|")
+    for name, secs, status, _, u in rows:
+        print(f"| {name} | {secs:.1f} | {u['requests']} | {u['input']} | {u['cached_input']} | {u['output']} | {status} |")
+    tot = llm.usage()
+    print(f"\nTotal: {tot['requests']} requests, {tot['input']} input tokens ({tot['cached_input']} cached), "
+          f"{tot['output']} output tokens")
 
 
 if __name__ == "__main__":

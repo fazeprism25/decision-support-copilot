@@ -1,4 +1,4 @@
-"""Data tab: upload/load a file, then review and edit column roles."""
+"""Data page: upload/load a file, then review and edit column roles."""
 import time
 from pathlib import Path
 
@@ -12,10 +12,10 @@ from engine.loader import file_hash, list_sheets, load_table
 from engine.profile import profile_frame
 from engine.roles import ROLE_HELP, ROLES, check_role, detect_roles, entity_attributes, schema_report
 from engine.valuemap import from_table, map_value, remap_plan, to_table
-from ui import state
+from ui import state, style
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-CHECK_ICON = {"ok": "✅ ok", "warn": "⚠️ warn", "fail": "❌ fail"}
+CHECK_ICON = {"ok": "ok", "warn": "warn", "fail": "fail"}
 
 
 @st.cache_data(max_entries=4, show_spinner=False)
@@ -35,8 +35,17 @@ def _pick_source() -> tuple[bytes, str] | None:
     options = ["Upload a file"] + (["Use a file from the data folder"] if samples else [])
     src = st.radio("Data source", options, horizontal=True, label_visibility="collapsed", key="src")
     if src == "Upload a file":
-        up = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xlsm", "xls"])
-        return (up.getvalue(), up.name) if up else None
+        up = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xlsm", "xls"],
+                              help="CSV, XLSX, XLSM or XLS. Empty rows and columns are removed automatically.")
+        if up:
+            st.session_state.upload = (up.getvalue(), up.name)
+        elif st.session_state.get("upload"):  # the uploader empties when another page is opened; keep the file
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.caption(f"Using `{st.session_state.upload[1]}` (uploaded earlier).", width="content")
+                if st.button("Remove", type="tertiary", key="rm_upload"):
+                    del st.session_state.upload
+                    st.rerun()
+        return st.session_state.get("upload")
     name = st.selectbox("File in data folder", samples, key="src_file")
     return (DATA_DIR / name).read_bytes(), name
 
@@ -69,21 +78,24 @@ def _apply_edits(edited: pd.DataFrame):
 def render():
     picked = _pick_source()
     if not picked:
-        st.info("Upload a CSV or Excel file to begin.")
+        _landing()
         return
     data, name = picked
 
     c1, c2 = st.columns(2)
+    fh = file_hash(data)
     sheets = _sheets(data, name)
-    sheet = c1.selectbox("Sheet", sheets) if len(sheets) > 1 else (sheets[0] if sheets else None)
+    sheet = c1.selectbox("Sheet", sheets, key=f"sheet_{fh}") if len(sheets) > 1 else (sheets[0] if sheets else None)
     with st.spinner("Loading file..."):
         df_auto, info_auto, _ = _load(data, name, sheet, None)
-    header = c2.number_input(f"Header row (auto-detected: {info_auto.header_row_auto + 1})",
-                             min_value=1, value=info_auto.header_row_auto + 1, step=1)
+    header = c2.number_input("Header row", min_value=1, value=info_auto.header_row_auto + 1, step=1,
+                             key=f"header_row_{fh}_{sheet}",
+                             help=f"The row that holds the column names. Auto-detected: row "
+                                  f"{info_auto.header_row_auto + 1}. Change it if the column names look wrong.")
     with st.spinner("Loading file..."):
         df, info, secs = _load(data, name, sheet, int(header) - 1)
 
-    dataset_id = f"{file_hash(data)}:{sheet}:{info.header_row}"
+    dataset_id = f"{fh}:{sheet}:{info.header_row}"
     if st.session_state.get("dataset_id") != dataset_id:
         _reset_for(dataset_id, df)
     st.session_state.df = df
@@ -95,11 +107,14 @@ def render():
     m[1].metric("Columns", info.n_cols)
     m[2].metric("Sheet", info.sheet or "CSV")
     m[3].metric("Load time", f"{secs:.1f}s")
-    for note in info.notes:
-        st.caption(note)
+    notes = list(info.notes)
     if info.dropped_empty_rows or info.dropped_empty_cols:
-        st.caption(f"Removed {info.dropped_empty_rows} fully empty row(s) and "
-                   f"{info.dropped_empty_cols} fully empty column(s).")
+        notes.append(f"Removed {info.dropped_empty_rows} fully empty row(s) and "
+                     f"{info.dropped_empty_cols} fully empty column(s).")
+    if notes:
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.caption(f"Loaded `{name}` · {len(notes)} loading note(s)", width="content")
+            style.info("\n".join(f"- {n}" for n in notes))
     with st.expander(f"Preview (first {min(500, len(df))} of {len(df):,} rows)", expanded=False):
         head = df.head(500)
         mixed = [c for c in head.columns if head[c].dtype == object]  # e.g. numbers mixed with text
@@ -111,10 +126,27 @@ def render():
     demo.finish()
 
 
+def _landing():
+    st.markdown('<div class="hero"><h2>Turn a spreadsheet into decisions</h2>'
+                "<p>Upload a file above to begin.</p>"
+                "</div>", unsafe_allow_html=True)
+    style.steps([("Load data", "Upload CSV/Excel and check what each column means"),
+                 ("Clean it", "One click fixes the common problems"),
+                 ("Read KPIs", "Cards and charts, each with its formula"),
+                 ("Ask & test", "Plain-English questions and what-if scenarios"),
+                 ("Decide", "Recommendations backed by evidence")])
+
+
 def _roles_section(df: pd.DataFrame):
-    st.subheader("Column roles")
+    st.divider()
+    style.heading("Column roles",
+                  "Each column gets a **role**, which decides how the app treats it.\n\n"
+                  + "\n".join(f"- **{r}**: {h}" for r, h in ROLE_HELP.items()) +
+                  "\n\n**Check** shows whether the data supports the role (ok · warn · fail).\n\n"
+                  "**Source**: *AI* = model label confirmed by the data · *rules* = code-only guess · "
+                  "*user* = your override.")
     ai_on = get_settings().ai_enabled
-    rerun = st.button("Re-detect roles")
+    rerun = st.button("Re-detect roles", help="Run role detection again from scratch (drops your edits).")
     if st.session_state.roles is None or rerun:
         with st.spinner("Detecting column roles..." + (" (asking AI)" if ai_on else "")):
             roles, msg = detect_roles(df, st.session_state.dataset_id, use_ai=ai_on,
@@ -127,9 +159,7 @@ def _roles_section(df: pd.DataFrame):
     elif st.session_state.get("roles_msg"):
         st.warning(st.session_state.roles_msg)
 
-    st.caption("Change any **role** in the table and the app uses your choice. "
-               "**Check** shows whether the data supports the role. "
-               "**Source**: AI = model label confirmed by the data; rules = code-only guess; user = your override.")
+    st.caption("Click a cell in the **role** column to change it.")
     view = roles.assign(check=roles["check"].map(CHECK_ICON))
     edited = st.data_editor(
         view, key=f"roles_{st.session_state.dataset_id}_{st.session_state.roles_version}",
@@ -145,23 +175,24 @@ def _roles_section(df: pd.DataFrame):
         st.error(f"{len(bad)} role(s) are not supported by the data: {', '.join(bad['column'])}. "
                  "Calculations will skip these until fixed.")
     counts = roles["role"].value_counts()
-    st.caption("Roles found: " + ", ".join(f"{r} × {n}" for r, n in counts.items()))
+    st.caption("Roles found: " + " · ".join(f"{r} × {n}" for r, n in counts.items()))
 
     rep = schema_report(roles, st.session_state.profile)
     unmapped = rep[rep["role"] == "UNMAPPED"]
     with st.expander(f"Schema mapping report ({len(rep) - len(unmapped)} mapped, {len(unmapped)} unmapped)"):
+        st.caption("Original column → role → how it was parsed → confidence. Unmapped columns are not used.")
         st.dataframe(rep, hide_index=True, width="stretch")
         st.download_button("Download report (CSV)", rep.to_csv(index=False).encode(), "schema_mapping_report.csv")
 
-    st.subheader("Entity attributes")
     attrs = entity_attributes(df, roles)
     st.session_state.entity_attrs = attrs
-    if attrs.empty:
-        st.caption("No columns found that stay fixed per group (e.g. a capacity repeated for each site).")
-    else:
-        st.caption("These columns repeat one value per group, so they describe the group, not each row. "
-                   "Later phases will not sum them across rows.")
-        st.dataframe(attrs, hide_index=True, width="stretch")
+    with st.expander(f"Entity attributes ({len(attrs)} found)"):
+        if attrs.empty:
+            st.caption("No columns found that stay fixed per group (e.g. a capacity repeated for each site).")
+        else:
+            st.caption("These columns repeat one value per group (e.g. a hub's daily capacity), so they describe "
+                       "the group, not each row. They are never summed across rows.")
+            st.dataframe(attrs, hide_index=True, width="stretch")
 
     _value_mapping_section()
 
@@ -206,9 +237,12 @@ def confirm_vmap(new: dict):
 
 
 def _value_mapping_section():
-    st.subheader("Category value mapping (C01)")
-    st.caption("Different departments use different labels (P1/P2/P3, completed/rto, Y/Yes). Map them to standard "
-               "labels once; after you confirm, every tab uses the standard labels.")
+    st.divider()
+    style.heading("Category value mapping",
+                  "Different departments use different labels for the same thing (P1/P2/P3, completed/rto, Y/Yes). "
+                  "Map them to standard labels once; after you **confirm**, every page uses the standard labels.\n\n"
+                  "Edit the **standard label** column freely; leave it blank to keep the original value.\n\n"
+                  "Standard vocabulary:\n" + "\n".join(f"- **{k}**: {', '.join(v)}" for k, v in D.VOCAB.items()))
     key = (st.session_state.dataset_id, state.fixes_sig(), state.roles_sig())
     if st.session_state.get("vmap_prop") is None or st.session_state.get("vmap_prop_for") != key:
         _propose()
@@ -224,14 +258,14 @@ def _value_mapping_section():
                                 column_config={"standard label": st.column_config.TextColumn(
                                     "standard label", help="Edit freely; leave blank to keep the original value. "
                                     "Standard: " + "; ".join(f"{k}: {', '.join(v)}" for k, v in D.VOCAB.items()))})
-        c1, c2, c3, _ = st.columns([1.4, 1.2, 1.4, 3])
-        if c1.button("✅ Confirm mapping", type="primary"):
+        row = st.container(horizontal=True)
+        if row.button("Confirm mapping", type="primary"):
             confirm_vmap(from_table(edited))
             st.rerun()
-        if c2.button("Clear mapping", disabled=not state.vmap()):
+        if row.button("Clear mapping", disabled=not state.vmap()):
             confirm_vmap({})
             st.rerun()
-        if c3.button("Propose again"):
+        if row.button("Propose again"):
             _propose()
             st.rerun()
         if state.vmap():
@@ -239,6 +273,10 @@ def _value_mapping_section():
             st.success(f"Mapping confirmed: {n} value(s) relabelled. KPIs, Ask, What-if and Recommendations use the "
                        "standard labels." if n else "Mapping confirmed: the labels are already standard.")
         else:
-            st.warning("Mapping not confirmed yet: all tabs still use the original labels.")
+            st.warning("Mapping not confirmed yet: all pages still use the original labels.")
     pk = state.pack()
-    (st.info if pk.active else st.caption)(f"Delivery-ops pack {pk.reason}.")
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.markdown(f"{':green-badge[ON]' if pk.active else ':gray-badge[OFF]'} Delivery-ops pack {pk.reason}.", width="content")
+        style.info("The **delivery-ops pack** adds delivery-specific metrics (on-time %, promise gap, margin per "
+                   "order, hub load). It switches on only when the data has promised time, actual time, fee, cost, "
+                   "a hub/site and its capacity.")

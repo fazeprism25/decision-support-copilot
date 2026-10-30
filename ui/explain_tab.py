@@ -24,7 +24,6 @@ def render():
         issues=issues, quality_score=q, days=date_span(df, ctx.roles),
         ai_status=("AI on" if ok else msg) + (f"; roles: {roles_msg}" if roles_msg else ""), rows_scenario=res["rows"][1],
         route=res["route"])
-    st.caption("Generated from what the app actually ran on the current data, fixes, mapping and scenario.")
     for s in secs:
         with st.expander(s.title, expanded=s.title.startswith(("1.", "8."))):
             for line in s.lines:

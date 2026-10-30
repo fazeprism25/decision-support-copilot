@@ -3,3 +3,30 @@ maxUploadSize = 500
 
 [browser]
 gatherUsageStats = false
+
+# Dark version of the 180DC look: stone neutrals, green accent, Geist type.
+[theme]
+base = "dark"
+primaryColor = "#5cb338"
+backgroundColor = "#141413"
+secondaryBackgroundColor = "#1f1e1c"
+textColor = "#e7e5e4"
+linkColor = "#7ccc5a"
+borderColor = "#2f2d2a"
+showWidgetBorder = true
+baseRadius = "0.5rem"
+baseFontSize = 15
+font = "Geist:https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap"
+codeFont = "Geist Mono:https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&display=swap"
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+chartCategoricalColors = ["#5cb338", "#4f9fd8", "#d8a24f", "#c96f8b", "#8d82d6", "#58b5a8"]
+redColor = "#e5675e"
+greenColor = "#5cb338"
+orangeColor = "#d8a24f"
+yellowColor = "#d6c35a"
+blueColor = "#4f9fd8"
+
+[theme.sidebar]
+backgroundColor = "#1a1918"
+secondaryBackgroundColor = "#24221f"
+borderColor = "#2f2d2a"

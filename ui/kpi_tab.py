@@ -1,4 +1,4 @@
-"""KPIs tab: AI- or rule-chosen plan, computed KPI cards with explain popovers, charts, KPI builder."""
+"""KPIs page: AI- or rule-chosen plan, computed KPI cards with explain popovers, charts, KPI builder."""
 import hashlib
 
 import streamlit as st
@@ -8,7 +8,7 @@ from engine import llm
 from engine.domains import delivery as D
 from engine.llm import LLMError, chat_json
 from engine.profile import to_datetime_clean
-from ui import state
+from ui import state, style
 from ui.charts import figure
 
 
@@ -18,9 +18,9 @@ def explain_md(k: K.KPI) -> str:
     if k.extra:
         lines.append(f"- **Note:** {k.extra}")
     lines += [f"- **Excluded:** {e}" for e in k.exclusions]
-    lines += [f"- ⚠️ {w}" for w in k.warnings]
+    lines += [f"- Warning: {w}" for w in k.warnings]
     if st.session_state.get("fixes"):
-        lines.append(f"- Computed after {len(st.session_state.fixes)} quality fix(es) (see Quality tab).")
+        lines.append(f"- Computed after {len(st.session_state.fixes)} quality fix(es) (see Quality page).")
     return "\n".join(lines)
 
 
@@ -109,31 +109,47 @@ def _date_warning(df, ctx):
             return
 
 
+def ensure_plan():
+    """Pick the KPIs once per dataset. Called before any page that needs them, not only the KPIs page."""
+    # mark it done only after the plan is saved: a run cut short mid-AI call (page switch) must retry
+    if st.session_state.get("kpi_plan_for") != st.session_state.dataset_id or "kpi_plan" not in st.session_state:
+        _make_plan(state.clean_df(), state.kpi_ctx(), use_ai=True)
+        st.session_state.kpi_plan_for = st.session_state.dataset_id
+
+
 def render():
     df, ctx = state.clean_df(), state.kpi_ctx()
-    if st.session_state.get("kpi_plan_for") != st.session_state.dataset_id:
-        st.session_state.kpi_plan_for = st.session_state.dataset_id
-        _make_plan(df, ctx, use_ai=True)
+    ensure_plan()
 
-    b1, b2, _ = st.columns([1.3, 1.3, 4])
-    if b1.button("Let AI choose KPIs", disabled=not llm.status()[0]):
-        _make_plan(df, ctx, use_ai=True)
-    if b2.button("Use default KPIs"):
-        _make_plan(df, ctx, use_ai=False)
     kind, msg = st.session_state.get("kpi_msg", ("info", ""))
-    if msg:
-        getattr(st, kind)(msg)
+    with st.container(horizontal=True, vertical_alignment="center"):
+        if st.button("Let AI choose KPIs", disabled=not llm.status()[0]):
+            _make_plan(df, ctx, use_ai=True)
+            kind, msg = st.session_state.kpi_msg
+        if st.button("Use default KPIs"):
+            _make_plan(df, ctx, use_ai=False)
+            kind, msg = st.session_state.kpi_msg
+        style.info("**Let AI choose** asks the model which calculations from a fixed catalog fit your columns; "
+                   "the app then validates each choice and computes it with pandas.\n\n**Default KPIs** are "
+                   "picked by rules from the column roles, no AI needed." + (f"\n\n**Last run:** {msg}" if msg else ""))
+    if kind == "warning" and msg:
+        st.warning(msg)
     _date_warning(df, ctx)
     _pack_section()
 
     plan = st.session_state.kpi_plan
     valid = [(i, it) for i, it in enumerate(plan) if not K.validate(it, df, ctx)]
-    for i, it in enumerate(plan):
-        if (errs := K.validate(it, df, ctx)):
-            st.caption(f"Skipped '{it.get('title') or it['calc']}': {'; '.join(errs)}")
+    skipped = [f"- **{it.get('title') or it['calc']}**: {'; '.join(errs)}" for it in plan
+               if (errs := K.validate(it, df, ctx))]
+    if skipped:
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.caption(f"{len(skipped)} KPI(s) skipped because the data does not support them", width="content")
+            style.info("\n".join(skipped))
     results = [(i, k) for (i, _), k in zip(valid, K.run_plan([it for _, it in valid], df, ctx))]
     st.session_state.kpi_results = [k for _, k in results]
 
+    style.heading("Key numbers", "Each card is computed by pandas on the cleaned data. Click **Explain** for "
+                  "the formula, filter, denominator and any excluded rows. **Remove** deletes a card.")
     cards = [(i, k) for i, k in results if k.chart is None]
     for row in range(0, len(cards), 4):
         cols = st.columns(4)
@@ -142,6 +158,8 @@ def render():
                 _card(i, k)
 
     charts = [(i, k) for i, k in results if k.chart is not None]
+    if charts:
+        style.heading("Charts")
     for row in range(0, len(charts), 2):
         cols = st.columns(2)
         for col, (i, k) in zip(cols, charts[row:row + 2]):
@@ -158,9 +176,11 @@ def _pack_section():
         st.caption(f"Delivery-ops pack {pk.reason}.")
         return
     m = state.pack_metrics()
-    with st.expander("🚚 Delivery-ops pack: on-time, promise gap, margin per order, hub load", expanded=True):
-        for note in m["notes"]:
-            st.caption(note)
+    with st.expander("Delivery-ops pack: on-time, promise gap, margin per order, hub load", expanded=True):
+        if m["notes"]:
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.caption(f"{len(m['notes'])} calculation note(s)", width="content")
+                style.info("\n".join(f"- {n}" for n in m["notes"]))
         heads = m["heads"]
         for row in range(0, len(heads), 4):
             cols = st.columns(4)
@@ -168,7 +188,7 @@ def _pack_section():
                 with col.container(border=True):
                     st.metric(h.label, D.fmt(h))
                     st.caption(f"{h.basis} · n = {h.n:,}")
-                    with st.popover("Explain"):
+                    with st.popover("Explain", width="stretch"):
                         st.markdown(f"- **Formula:** {h.formula}\n- **Filter:** {h.filter}\n- **Rows:** {h.n:,}\n"
                                     f"- **Basis:** {h.basis}")
         seg = m["segments"]
@@ -179,11 +199,11 @@ def _pack_section():
                                        f"On-time % by {pk.cols[k]} (calculated)"), width="stretch", key=f"pk_{k}")
                 st.dataframe(tbl.round(2), hide_index=True, width="stretch")
         hub = m["hub"]
-        st.markdown("**Hub load model** — reported and calculated figures side by side")
+        style.label("Hub load model — reported and calculated figures side by side",
+                    f"Model: {hub['calibration']}. Wait multiplier uses {hub.get('util_basis', '')} utilisation.\n\n"
+                    "- **[reported]** = value in the file\n- **[calculated]** = computed here\n"
+                    "- **[model]** = estimate based on assumptions")
         st.dataframe(hub["table"], hide_index=True, width="stretch")
-        st.caption(f"Model: {hub['calibration']}. Wait multiplier uses {hub.get('util_basis', '')} utilisation. "
-                   "[reported] = value in the file · [calculated] = computed here · [model] = estimate based on "
-                   "assumptions.")
         if hub.get("mismatch"):
             st.warning(hub["mismatch"])
 
@@ -191,19 +211,20 @@ def _pack_section():
 def _card(i: int, k: K.KPI, compact: bool = False):
     if not compact:
         st.metric(k.title, K.fmt_value(k.value, k.fmt))
-    st.caption(f"{k.basis}" + (f" · {k.extra}" if k.extra else "") + (" · ⚠️ see explain" if k.warnings else ""))
-    c1, c2 = st.columns([3, 1])
-    with c1.popover("Explain"):
+    st.caption(f"{k.basis}" + (f" · {k.extra}" if k.extra else "") + (" · warning, see Explain" if k.warnings else ""))
+    c1, c2 = st.columns([3, 1], vertical_alignment="center")
+    with c1.popover("Explain", width="stretch"):
         st.markdown(explain_md(k))
         if k.table is not None and k.chart and k.chart["type"] != "hist":
             st.dataframe(k.table, hide_index=True)
-    if c2.button("✕", key=f"rm_{i}", help="Remove this KPI"):
+    if c2.button("Remove", key=f"rm_{i}", help="Remove this KPI", type="tertiary"):
         st.session_state.kpi_plan.pop(i)
         st.rerun()
 
 
 def _builder(df, ctx: K.Ctx):
-    with st.expander("➕ Add a KPI"):
+    with st.expander("Add a KPI"):
+        st.caption("Pick a calculation, then the columns it uses. Only columns with a matching role are offered.")
         calc = st.selectbox("Calculation", list(K.CATALOG), format_func=lambda c: f"{c} — {K.CATALOG[c]['desc']}")
         params = {}
         for name, rule in K.CATALOG[calc]["params"].items():
@@ -225,7 +246,7 @@ def _builder(df, ctx: K.Ctx):
                                 else st.selectbox(name, vals, key=key))
         title = st.text_input("Title (optional)", key=f"b_{calc}_title")
         item = {"calc": calc, "params": params, "title": title}
-        if st.button("Add KPI"):
+        if st.button("Add KPI", type="primary"):
             errs = K.validate(item, df, ctx)
             if errs:
                 st.error("; ".join(errs))

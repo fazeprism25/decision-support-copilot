@@ -7,11 +7,11 @@ from engine import llm
 from engine import recommend as R
 from engine.quality import quality_score
 from engine.scenario import apply_rows
-from ui import state, whatif_tab
+from ui import state, style, whatif_tab
 
-CONF_ICON = {"High": "🟢 High", "Medium": "🟡 Medium", "Low": "🔴 Low"}
-STATUS_ICON = {"new in scenario": "🆕 new in scenario", "resolved in scenario": "✅ resolved in scenario",
-               "changed": "↕️ changed by scenario", "unchanged": "unchanged by scenario"}
+CONF_ICON = {"High": ":green-badge[High]", "Medium": ":orange-badge[Medium]", "Low": ":red-badge[Low]"}
+STATUS_ICON = {"new in scenario": "new in scenario", "resolved in scenario": "resolved in scenario",
+               "changed": "changed by scenario", "unchanged": "unchanged by scenario"}
 
 
 def compute() -> tuple[list[R.Rec], list[R.Rec], list[dict], object, dict]:
@@ -36,28 +36,34 @@ def render():
     base, scen, rows, params, res = compute()
     st.session_state.last_recs = scen
     n_c = len(st.session_state.get("constraints", []))
-    st.caption("Each recommendation comes from a rule over computed numbers (see Explain tab). Ranked by impact. "
-               + (f"Comparing baseline with the current scenario ({n_c} constraint(s) + sliders)."
-                  if not params.is_empty() else "No scenario active: before = after. Add a constraint on What-if."))
+    st.markdown(f"Comparing baseline with the **current scenario** ({n_c} constraint(s) + sliders)."
+                if not params.is_empty() else "No scenario active, so before = after. Add a constraint on What-if.")
     ok, why = llm.status()
+    msg = ""
     if ok and scen:
         key = hashlib.sha1((state.data_hash() + params.model_dump_json()).encode()).hexdigest()[:16]
         with st.spinner("AI is rewording recommendations in plain language..."):
             msg = R.rewrite(scen, key)
-        st.caption(msg)
     elif scen:
-        st.caption(f"Showing rule wording (AI-down mode: {why}).")
+        msg = f"Showing rule wording (AI-down mode: {why})."
+    if msg:
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.caption(msg, width="content")
+            style.info("Each recommendation comes from a rule over computed numbers (see the Explain page), ranked "
+                       "by impact. The AI only rewrites the wording; numbers it adds are checked against the "
+                       "evidence.\n\nConfidence: High · Medium · Low")
     if not rows:
         st.success("No rule fired: nothing stands out in the computed numbers.")
     for i, c in enumerate(rows, 1):
         r = c["rec"]
         with st.container(border=True):
-            st.markdown(f"**{i}. {r.title}**")
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.markdown(f"#### {i}. {r.title}", width="content")
+                style.info(f"**Impact score** {r.impact:.2f} = {r.impact_formula}"
+                           + (f"\n\n**Rule text:** {r.action}" if r.plain else "")
+                           + (f"\n\n{r.rewrite_note}" if r.rewrite_note else ""))
             st.markdown(r.plain or r.action)
-            if r.plain:
-                st.caption(f"Rule text: {r.action}")
-            st.caption(f"Confidence {CONF_ICON[r.confidence]} · impact score {r.impact:.2f} ({r.impact_formula}) · "
-                       f"{STATUS_ICON[c['status']]}" + (f" · {r.rewrite_note}" if r.rewrite_note else ""))
+            st.caption(f"Confidence {CONF_ICON[r.confidence]} · impact {r.impact:.2f} · {STATUS_ICON[c['status']]}")
             with st.expander("Evidence: numbers, formulas, before vs after scenario"):
                 st.dataframe(c["table"], hide_index=True, width="stretch")
                 if r.assumptions:

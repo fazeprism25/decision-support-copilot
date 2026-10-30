@@ -8,7 +8,7 @@ import streamlit as st
 from engine import llm
 from engine.kpis import fmt_value
 from engine.qa import cached, cached_ask, example_questions, pending, prefetch, schema_text
-from ui import state
+from ui import state, style
 from ui.charts import figure
 
 
@@ -25,7 +25,7 @@ def _context() -> tuple[pd.DataFrame, str, str]:
     defs = [f"{k.title}: {k.formula}; filter {k.filter}" for k in st.session_state.get("kpi_results", [])
             if k.calc in ("on_time_rate", "margin", "share")]
     if defs:  # same definitions as the KPI cards
-        notes += "\nKPI definitions used on the KPI tab (use the same when relevant):\n- " + "\n- ".join(defs)
+        notes += "\nKPI definitions used on the KPI page (use the same when relevant):\n- " + "\n- ".join(defs)
     return df, schema_text(df, state.role_map(), state.meanings(), st.session_state.profile), notes
 
 
@@ -35,8 +35,18 @@ def _ask(q: str):
     with st.spinner("Writing and running code..."):
         a, hit = cached_ask(q, df, schema, notes, state.data_hash())
     a.data_note = state.cleaning_summary()
-    a.timing = "⚡ from cache (same question, same data)" if hit else f"answered in {time.perf_counter() - t:.1f}s"
+    a.timing = "from cache (same question, same data)" if hit else f"answered in {time.perf_counter() - t:.1f}s"
     st.session_state.qa_history.insert(0, a)
+
+
+def ensure_prefetch():
+    """Start answering the example questions in the background once per dataset, whichever page is open."""
+    ctx, h = state.kpi_ctx(), state.data_hash()
+    if llm.status()[0] and st.session_state.get("prefetched_for") != h:
+        examples = example_questions(state.clean_df(), ctx.roles, ctx.entity_of, state.pack())
+        df, schema, notes = _context()
+        prefetch(examples, df, schema, notes, h)
+        st.session_state.prefetched_for = h
 
 
 def render():
@@ -45,33 +55,34 @@ def render():
     ctx = state.kpi_ctx()
     h = state.data_hash()
     examples = example_questions(state.clean_df(), ctx.roles, ctx.entity_of, state.pack())
-    if ok and st.session_state.get("prefetched_for") != h:
-        df, schema, notes = _context()
-        prefetch(examples, df, schema, notes, h)
-        st.session_state.prefetched_for = h
+    ensure_prefetch()
     if not ok:
-        st.warning(f"Q&A needs AI for new questions. {why} Cached answers below still work; all other tabs work.")
-    st.caption("The AI writes pandas code, the app runs it on your data in a locked-down sandbox, and every answer "
-               "comes from that executed code. The code is shown under each answer.")
+        st.warning(f"Q&A needs AI for new questions. {why} Cached answers below still work; all other pages work.")
 
-    ready = [cached(q, h) is not None for q in examples]
-    busy = pending(examples, h)
-    st.markdown("**Example questions** " + (f"(preparing {busy} in the background…)" if busy else ""))
-    cols = st.columns(3)
-    for i, q in enumerate(examples):
-        if cols[i % 3].button(("⚡ " if ready[i] else "") + q, key=f"ex_{i}", disabled=not (ok or ready[i]),
-                              width="stretch"):
-            _ask(q)
-    with st.form("ask", clear_on_submit=True):
-        q = st.text_input("Your question")
-        go = st.form_submit_button("Ask", disabled=not ok)
+    with st.form("ask", clear_on_submit=True, border=True):
+        c1, c2 = st.columns([6, 1], vertical_alignment="bottom")
+        q = c1.text_input("Your question", placeholder="e.g. Which hub has the lowest on-time rate?")
+        go = c2.form_submit_button("Ask", disabled=not ok, type="primary", width="stretch")
     if go and q.strip():
         _ask(q.strip())
 
+    ready = [cached(q, h) is not None for q in examples]
+    busy = pending(examples, h)
+    style.label("Example questions" + (f" (preparing {busy} in the background…)" if busy else ""),
+                "Built from this file's own columns and answered in the background as soon as the file loads. "
+                "Questions marked *ready* are already answered, so clicking one is instant.")
+    cols = st.columns(3)
+    for i, q in enumerate(examples):
+        if cols[i % 3].button(q + (" (ready)" if ready[i] else ""), key=f"ex_{i}", disabled=not (ok or ready[i]),
+                              width="stretch"):
+            _ask(q)
+    if st.session_state.qa_history:
+        st.divider()
     for n, a in enumerate(st.session_state.qa_history):
         with st.container(border=True):
-            st.markdown(f"**Q: {a.question}**")
-            st.caption(getattr(a, "data_note", "") + (f" · {a.timing}" if getattr(a, "timing", "") else ""))
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.markdown(f"#### {a.question}", width="content")
+                style.info((getattr(a, "data_note", "") or "") + (f"\n\n{a.timing}" if getattr(a, "timing", "") else ""))
             if a.error:
                 st.error(f"Could not answer after {a.attempts} attempt(s): {a.error}")
             else:

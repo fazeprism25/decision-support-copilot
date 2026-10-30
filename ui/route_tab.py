@@ -1,4 +1,4 @@
-"""Route cost tab (cost-analytics card): base vs full cost per route, three rankings side by side, hidden cost,
+"""Route cost page (cost-analytics card): base vs full cost per route, three rankings side by side, hidden cost,
 decision robustness verdict with break-even. Typed constraints share the What-if constraint list and Change Log."""
 import pandas as pd
 import plotly.express as px
@@ -6,10 +6,10 @@ import streamlit as st
 
 from engine import routecost as RC
 from engine.scenario import CostComponent, Params, apply_rows
-from ui import state
+from ui import state, style
 
-HIGHLIGHT = "background-color: rgba(230, 160, 30, 0.22)"
-CHEAPEST = "background-color: rgba(40, 160, 90, 0.30); font-weight: 600"
+HIGHLIGHT = "background-color: rgba(216, 162, 79, 0.18)"
+CHEAPEST = "background-color: rgba(92, 179, 56, 0.24); font-weight: 600"
 ENTRY_COLS = ["name", "value", "per", "status"]
 
 
@@ -38,6 +38,7 @@ def _editor(rs: RC.RouteSetup, df: pd.DataFrame, roles: dict[str, str], entity_o
                                format_func=lambda x: none if x is None else x)
 
     with st.expander("Route setup: grouping and cost columns (auto-filled, editable)", expanded=bool(rs.missing())):
+        st.caption("Filled in automatically from the column roles. Hover a field's label for help.")
         labels = of("category", "location", "id")
         rs.route_cols = st.multiselect("Route = combination of (one route column, or e.g. hub × zone)", labels,
                                        [c for c in rs.route_cols if c in labels], key=k("cols"))
@@ -72,9 +73,10 @@ def _editor(rs: RC.RouteSetup, df: pd.DataFrame, roles: dict[str, str], entity_o
                                   of("category", "flag"), rs.cost_status_col, "csc")
         rs.distance = pick(c3, "Distance column (for per-km entries)", of("measure", "quantity"), rs.distance, "dist")
 
-        st.markdown("**Your cost entries** (parking, tolls or anything else; applied to every route; default "
-                    "status unverified). For one place only, type it below, e.g. 'tolls of Rs 40 per order on East "
-                    "routes, unverified'.")
+        style.label("Your cost entries",
+                    "Add parking, tolls or anything else here. Each entry applies to **every route**; its default "
+                    "status is *unverified*. For one place only, type it in the cost constraint box instead, e.g. "
+                    "'tolls of Rs 40 per order on East routes, unverified'.")
         cur = pd.DataFrame([e.model_dump(include=set(ENTRY_COLS)) for e in rs.entries], columns=ENTRY_COLS)
         ed = st.data_editor(cur, num_rows="dynamic", key=k("entries"), hide_index=True, width="stretch",
                             column_config={"per": st.column_config.SelectboxColumn(options=["order", "km", "minute"]),
@@ -84,7 +86,9 @@ def _editor(rs: RC.RouteSetup, df: pd.DataFrame, roles: dict[str, str], entity_o
                                     status=r.get("status") or "unverified")
                       for r in ed.to_dict("records") if str(r.get("name") or "").strip() and pd.notna(r.get("value"))]
         keys = ["failed attempts", "return journey"] + [RC.comp_key(c) for c in rs.cost_cols]
-        st.markdown("**Status of data components** (set 'confirmed' once you have verified a figure)")
+        style.label("Status of data components",
+                    "Costs read from the data count as *confirmed* by default. Set a status here once you know "
+                    "better, e.g. 'confirmed' after you have verified a figure.")
         cols = st.columns(max(1, len(keys)))
         for col, ck in zip(cols, keys):
             opts = ["from data"] + list(RC.STATUSES)
@@ -117,11 +121,12 @@ def render():
     from ui import whatif_tab
 
     df, ctx, rs = state.clean_df(), state.kpi_ctx(), route_setup()
-    st.caption("Management ranks routes on base cost. This tab adds the costs that estimate may leave out "
-               "(failed attempts, returns, waiting, parking, tolls, your own entries), each with a status, and checks "
-               "whether the cheapest route still wins.")
     _editor(rs, df, ctx.roles, ctx.entity_of)
-    st.subheader("Cost constraint")
+    style.heading("Cost constraint",
+                  "Type a cost change in plain English; you confirm before it applies. It shares one list with the "
+                  "What-if page and is logged in the Change Log.\n\nExamples:\n"
+                  "- Tolls of Rs 40 per order on East routes, unverified\n- Include waiting cost at Rs 2 per minute\n"
+                  "- Parking is confirmed at Rs 15 per order\n- Exclude unverified costs")
     whatif_tab.constraint_box("rt", "Type a cost card, e.g. 'Tolls of Rs 40 per order on East routes, unverified', "
                                     "'Include waiting cost at Rs 2 per minute', 'Parking is confirmed at Rs 15 per "
                                     "order', 'Exclude unverified costs'")
@@ -140,18 +145,26 @@ def render():
     c1, c2, c3 = st.columns(3)
     c1.metric("Under-estimated by base cost (all statuses)", f"{t['hidden_all']:,.2f}",
               help="Σ full cost − Σ base cost over every order")
-    c2.metric("…of which confirmed", f"{t['hidden_confirmed']:,.2f}")
-    c3.metric("Hidden cost % of base", f"{t['hidden_pct'] or 0:.1f}%")
+    c2.metric("…of which confirmed", f"{t['hidden_confirmed']:,.2f}",
+              help="Only the hidden costs with status 'confirmed'.")
+    c3.metric("Hidden cost % of base", f"{t['hidden_pct'] or 0:.1f}%",
+              help="How much the base cost under-states the full cost, as a % of base cost.")
 
-    st.subheader("Rankings side by side (cost per order; 1 = cheapest)")
+    st.divider()
+    style.heading("Rankings side by side",
+                  "Cost per order for each route under three views (**base** only, **confirmed** costs, **all** "
+                  "costs); rank 1 = cheapest.\n\nAmber rows: the rank changes between views.\n\n"
+                  "Green cell: the cheapest route in that view.\n\n" + " ".join(r["notes"]))
     st.dataframe(_style(r["routes"], views, w), hide_index=True, width="stretch")
-    st.caption("Amber rows: rank changes between views. Green cell: cheapest route in that view. "
-               + " ".join(r["notes"]))
     if r["flips"]:
-        st.markdown("**What flips the decision**")
+        style.label("What flips the decision",
+                    "Each row is a cost component that, if it changes by the amount shown (break-even), would "
+                    "make a different route the cheapest.")
         st.dataframe(pd.DataFrame(r["flips"]), hide_index=True, width="stretch")
 
-    st.subheader("Cost components")
+    st.divider()
+    style.heading("Cost components", "Every cost that makes up the full cost, with its total, per-order value "
+                  "and status (confirmed / provisional / unverified).")
     st.dataframe(r["components"].style.format({"total": "{:,.2f}", "per order": "{:,.2f}"}), hide_index=True,
                  width="stretch")
     ranked = r["routes"].dropna(subset=[f"{'decision' if r['excluded'] else 'all'} rank"])["route"].head(10).tolist()

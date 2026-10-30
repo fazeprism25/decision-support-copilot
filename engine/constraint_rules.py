@@ -197,7 +197,7 @@ def parse_rules(text: str, df: pd.DataFrame, roles: dict[str, str], setup: Setup
         cand = [c for c in df.columns if _stem(target.split()[0]) in _n(c)]
         has_cap = [c for c in cand if any(e == c and roles.get(a) == "quantity" for a, e in entity_of.items())]
         where = f"'{cand[0]}'" if cand else f"a '{target}' column"
-        sugg = (f"This is a view, not a scenario. On the KPIs tab use 'Add a KPI' → segment_breakdown with group {where}"
+        sugg = (f"This is a view, not a scenario. On the KPIs page use 'Add a KPI' → segment_breakdown with group {where}"
                 + (f", or in What-if → Model setup pick {where} as the entity" if has_cap else
                    f". The cascade needs a capacity per {target}, which this data does not have, so it stays by "
                    f"'{setup.entity}'" if setup.entity else ""))

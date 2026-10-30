@@ -2,26 +2,31 @@
 
 Upload any CSV/Excel file → quality checks, KPIs, charts, Q&A, what-if scenarios, recommendations.
 
-## First-time setup (once)
-Open PowerShell in this folder and run:
+## Setup and run: Windows
+Open PowerShell in this folder and run once (needs Python 3.11+):
 ```
-py -V:Astral/CPython3.11.15 -m venv .venv
+py -V:Astral/CPython3.11.15 -m venv .venv      # or: py -3.11 -m venv .venv (python.org install)
 .venv\Scripts\python -m pip install -r requirements.txt
 copy .env.example .env
 ```
-Then open `.env` in Notepad and paste your OpenRouter key after `LLM_API_KEY=`.
-To switch provider/model later, edit only `.env` (instructions inside it) and restart the app.
+Open `.env` in Notepad and paste your API key after `LLM_API_KEY=` (DeepSeek by default; other providers
+are described inside the file). Then double-click `run.bat`, or run `.venv\Scripts\streamlit run app.py`.
 
-## Run the app
-Double-click `run.bat`, or in PowerShell:
+## Setup and run: Mac
+Needs Python 3.11+ (`python3 --version`; if older, `brew install python@3.11`). In Terminal, in this folder:
 ```
-.venv\Scripts\streamlit run app.py
+chmod +x run.sh
+./run.sh
 ```
+The first run installs everything and creates `.env`, then stops so you can paste your API key into it.
+Run `./run.sh` again to start the app.
+
 The browser opens at http://localhost:8501. Stop with Ctrl+C in the terminal.
+Without a key the app still works: AI features switch off and rules take over.
 
 ## Run the tests
 ```
-.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m pytest -q        # Mac: .venv/bin/python -m pytest -q
 ```
 
 ## Demo

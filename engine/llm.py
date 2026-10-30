@@ -21,6 +21,8 @@ class LLMError(Exception):
 _POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="llm")
 _lock = threading.Lock()
 _state = {"down_until": 0.0, "reason": "", "last_ok": None, "calls": []}  # calls: (when, tier, seconds, ok)
+# token totals from replies that arrived (a call abandoned at the time limit may still be billed)
+_usage = {"requests": 0, "input": 0, "cached_input": 0, "output": 0}
 
 
 def status() -> tuple[bool, str]:
@@ -50,6 +52,19 @@ def recent_calls() -> list[tuple]:
     return list(_state["calls"][-50:])
 
 
+def usage() -> dict:
+    """Running token totals since start: requests, input, cached_input (part of input), output."""
+    return dict(_usage)
+
+
+def _add_usage(inp: int, cached: int, out: int):
+    with _lock:
+        _usage["requests"] += 1
+        _usage["input"] += inp or 0
+        _usage["cached_input"] += cached or 0
+        _usage["output"] += out or 0
+
+
 def _call_once(model: str, system: str, prompt: str, max_tokens: int, reasoning: str = "off",
                timeout: float = 20.0) -> str:
     s = get_settings()
@@ -61,24 +76,34 @@ def _call_once(model: str, system: str, prompt: str, max_tokens: int, reasoning:
             model=model, max_tokens=max_tokens, system=system,
             messages=[{"role": "user", "content": prompt}],
         )
+        u = msg.usage
+        _add_usage(u.input_tokens + (u.cache_read_input_tokens or 0), u.cache_read_input_tokens or 0,
+                   u.output_tokens)
         return "".join(b.text for b in msg.content if b.type == "text")
 
     from openai import OpenAI
 
     client = OpenAI(api_key=s.api_key, base_url=s.base_url, timeout=timeout, max_retries=0)
     # "off" disables thinking (much faster); otherwise think at that effort but hide the thinking text.
-    # Thinking still uses tokens, so keep a floor.
+    # Thinking still uses tokens, so keep a floor. The "reasoning" field is OpenRouter-only; on DeepSeek
+    # the model name decides it (deepseek-chat = no thinking, deepseek-reasoner = thinking).
     rb = {"enabled": False} if reasoning == "off" else {"effort": reasoning, "exclude": True}
+    extra = {"reasoning": rb} if s.provider == "openrouter" else {}
     try:
         resp = client.chat.completions.create(
             model=model, max_tokens=max(max_tokens, 1024 if reasoning == "off" else 4096),
-            extra_body={"reasoning": rb},
+            extra_body=extra,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
         )
     except Exception as e:  # some models (e.g. the openrouter/free router) refuse "thinking off"
         if reasoning == "off" and "reasoning is mandatory" in str(e).lower():
             return _call_once(model, system, prompt, max_tokens, "low", timeout)
         raise
+    u = resp.usage
+    if u:  # DeepSeek reports cache hits as prompt_cache_hit_tokens, OpenAI-style APIs in prompt_tokens_details
+        details = getattr(u, "prompt_tokens_details", None)
+        cached = getattr(u, "prompt_cache_hit_tokens", None) or getattr(details, "cached_tokens", 0)
+        _add_usage(u.prompt_tokens, cached or 0, u.completion_tokens)
     return resp.choices[0].message.content or ""
 
 
@@ -112,7 +137,9 @@ def chat(prompt: str, system: str = "You are a precise assistant.", tier: str = 
             errors.append(f"{m}: no reply within {s.timeout_s:g}s")
             break  # the time budget is spent
         except Exception as e:  # network, rate limit, retired model, bad key
-            errors.append(f"{m}: {type(e).__name__}: {str(e)[:200]}")
+            # provider messages can carry emoji (e.g. a "free" badge in model names); keep plain text only
+            plain = re.sub("[^\x00- ]+", "", str(e))
+            errors.append(f"{m}: {type(e).__name__}: {plain[:200]}")
     if time.perf_counter() >= deadline - 1 and not any("within" in e for e in errors):
         errors.append(f"stopped after {s.timeout_s:g}s")
     reason = " | ".join(errors) or "no model available"

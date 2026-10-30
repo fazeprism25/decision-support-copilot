@@ -49,8 +49,8 @@ def finish():
     st.session_state.vmap_msg = "Proposed by rules (demo)."
     data_tab.confirm_vmap(from_table(st.session_state.vmap_prop))
     steps.append("value mapping confirmed")
-    st.session_state.kpi_plan_for = st.session_state.dataset_id
     kpi_tab._make_plan(state.clean_df(), state.kpi_ctx(), use_ai=llm.status()[0])
+    st.session_state.kpi_plan_for = st.session_state.dataset_id
     whatif_tab.setup()
     p = whatif_tab.interpret(DEMO_CONSTRAINT)
     if p.ok:

@@ -76,6 +76,27 @@ def _load(at: AppTest, name: str) -> AppTest:
     return at
 
 
+PAGES = ["Data", "Quality", "KPIs", "Ask", "What-if", "Route cost", "Recommendations", "Explain", "Change Log"]
+
+
+def _visit(at: AppTest, page: str) -> AppTest:
+    """Open one page from the sidebar menu (only the open page runs)."""
+    at.radio(key="page").set_value(page).run()
+    assert not at.exception, (page, [e.message for e in at.exception])
+    return at
+
+
+def _all_pages(at: AppTest) -> tuple[str, list[str], int]:
+    """Visit every page; return all text, all expander labels and the number of sliders seen."""
+    txt, exp, sliders = [], [], 0
+    for page in PAGES:
+        _visit(at, page)
+        txt.append(_text(at))
+        exp += [e.label for e in at.expander]
+        sliders += len(at.slider)
+    return "\n".join(txt), exp, sliders
+
+
 def _text(at: AppTest) -> str:
     parts = [m.value for m in at.markdown] + [m.value for m in at.caption]
     for kind in (at.error, at.warning, at.info, at.success):
@@ -86,15 +107,15 @@ def _text(at: AppTest) -> str:
 def test_app_keeps_working_with_ai_down(ai_key):
     at = _load(_app(), "BUDS_unknown_schema_test.csv")
     assert not at.exception, [e.message for e in at.exception]
-    txt = _text(at)
+    txt, exp, sliders = _all_pages(at)
     assert "AI-down mode" in txt  # clear message in the sidebar
     assert "AI labelling unavailable, using rules only" in txt  # roles still detected by rules
     assert "Quality score" in txt  # quality
     assert "Margin per order" in txt and "Hub load model" in txt  # KPIs + delivery pack
     assert "Cascade" in txt or "Feasible" in txt  # What-if
     assert "Showing rule wording" in txt and "below the 80% goal" in txt  # rule-based recommendations
-    assert "1. Data used" in [e.label for e in at.expander]  # Explain tab
-    assert len(at.sidebar.slider) >= 3  # sliders
+    assert "1. Data used" in exp  # Explain page
+    assert sliders >= 3  # What-if levers
 
 
 @pytest.mark.parametrize("name", ["retail_sales.csv", "hr_employees.csv"])
@@ -103,7 +124,7 @@ def test_unrelated_datasets_run_with_pack_off(name):
         pytest.skip("run scripts/make_synthetic.py")
     at = _load(_app(), name)
     assert not at.exception, [e.message for e in at.exception]
-    txt = _text(at)
+    txt = _all_pages(at)[0]
     assert "Delivery-ops pack off" in txt
     assert "Hub load model" not in txt
     assert "Duplicate record" in txt  # the planted duplicates are found
@@ -111,15 +132,24 @@ def test_unrelated_datasets_run_with_pack_off(name):
 
 def test_demo_and_reset_buttons():
     at = _app()
-    at.sidebar.button[1].click().run()  # Load demo scenario
+    next(b for b in at.sidebar.button if b.label == "Load demo data").click().run()
     assert not at.exception, [e.message for e in at.exception]
-    msg = " ".join(s.value for s in at.sidebar.success)
+    msg = " ".join(s.value for s in at.sidebar.caption)
     assert "Demo loaded" in msg and "Central hub is down for 3 days" in msg and "applied" in msg
     assert at.session_state["constraints"] and at.session_state["fixes"]
-    assert "#1" in _text(at)  # logged in the Change Log
-    at.sidebar.button[0].click().run()  # Reset everything
+    assert "#1" in _text(_visit(at, "Change Log"))  # logged in the Change Log
+    next(b for b in at.sidebar.button if b.label == "Reset everything").click().run()
     assert not at.exception
-    assert "constraints" not in at.session_state and "Load a dataset in the Data tab first." in _text(at)
+    assert "constraints" not in at.session_state
+    assert "Load a dataset on the Data page first." in _text(_visit(at, "KPIs"))
+
+
+def test_kpi_page_rebuilds_plan_lost_mid_run():
+    """A run cut short while the AI picks KPIs (page switch) leaves kpi_plan_for set but no kpi_plan."""
+    at = _visit(_load(_app(), "Round_1_BUDS.xlsx"), "KPIs")
+    del at.session_state["kpi_plan"]
+    _visit(at, "Data")
+    assert "Key numbers" in _text(_visit(at, "KPIs"))
 
 
 # ---------- Q&A cache + examples ----------

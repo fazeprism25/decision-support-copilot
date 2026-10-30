@@ -112,8 +112,8 @@ def _quality(inp: Inputs) -> list[Rec]:
     ev += [Evidence(f"{i.rule.replace('_', ' ')} in '{i.column}'", i.count, "int", f"rows affected of {i.denominator:,}")
            for i in top]
     return [Rec("quality", "quality", "Fix the remaining data-quality issues before acting on these numbers",
-                "Open the Quality tab and click 'Apply recommended fixes' (or choose a fix per issue).", ev,
-                limitations=["Numbers on every tab include these rows until they are fixed."],
+                "Open the Quality page and click 'Apply recommended fixes' (or choose a fix per issue).", ev,
+                limitations=["Numbers on every page include these rows until they are fixed."],
                 impact=round(1 - (inp.quality_score or 100) / 100, 4), impact_formula="share of rows with an issue")]
 
 

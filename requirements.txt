@@ -8,3 +8,4 @@ pydantic>=2.8
 python-dotenv>=1.0
 pytest>=8.0
 openai>=1.50
+python-calamine>=0.2

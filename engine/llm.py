@@ -1,5 +1,10 @@
 """Single entry point for LLM calls. Provider is chosen in .env; callers never see SDK details.
-Every function returns None (never raises) when AI is unavailable, so the app keeps working."""
+Failures raise LLMError only; callers catch it and show a message, so the app keeps working."""
+import hashlib
+import json
+import re
+from pathlib import Path
+
 from engine.config import get_settings
 
 
@@ -50,3 +55,40 @@ def chat(prompt: str, system: str = "You are a precise assistant.", tier: str = 
         except Exception as e:  # network, rate limit, retired model, bad key
             errors.append(f"{m}: {type(e).__name__}: {str(e)[:200]}")
     raise LLMError(" | ".join(errors))
+
+
+_CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache" / "llm"
+
+
+def _extract_json(text: str):
+    text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"[\[{].*[\]}]", text, flags=re.S)
+        if not m:
+            raise LLMError("Model reply contained no JSON.")
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError as e:
+            raise LLMError(f"Model reply was not valid JSON: {e}") from e
+
+
+def chat_json(prompt: str, system: str = "Output strict JSON only.", tier: str = "fast",
+              cache_key: str = "", max_tokens: int = 4096):
+    """chat() that parses JSON. Successful results are cached on disk per (cache_key, model, prompt);
+    cache_key should include the dataset hash so a new upload never reuses old answers."""
+    s = get_settings()
+    model = s.model_smart if tier == "smart" else s.model_fast
+    h = hashlib.sha256(f"{cache_key}|{model}|{system}|{prompt}".encode()).hexdigest()[:24]
+    path = _CACHE_DIR / f"{h}.json"
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        result = _extract_json(chat(prompt, system=system, tier=tier, max_tokens=max_tokens))
+    except LLMError as first:
+        result = _extract_json(chat(prompt + f"\n\nYour previous reply failed: {first}. Return valid JSON only.",
+                                    system=system, tier=tier, max_tokens=max_tokens))
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result), encoding="utf-8")
+    return result

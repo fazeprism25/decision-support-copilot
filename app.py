@@ -3,6 +3,7 @@ import streamlit as st
 
 from engine.config import get_settings
 from engine.llm import LLMError, chat
+from ui import data_tab
 
 st.set_page_config(page_title="Decision Support", layout="wide")
 
@@ -34,6 +35,11 @@ PLANNED = {
 for tab, name in zip(st.tabs(TABS), TABS):
     with tab:
         st.header(name)
+        if name == "Data":
+            data_tab.render()
+            continue
+        if "df" not in st.session_state:
+            st.caption("Load a dataset in the Data tab first.")
         st.info(PLANNED[name])
         if name == "Change Log" and not st.session_state.change_log:
             st.caption("No changes recorded yet.")

@@ -15,6 +15,8 @@ class Settings:
     model_smart: str
     model_fast: str
     model_fallback: str
+    reasoning_fast: str = "off"
+    reasoning_smart: str = "low"
 
     @property
     def ai_enabled(self) -> bool:
@@ -30,4 +32,6 @@ def get_settings() -> Settings:
         model_smart=env("MODEL_SMART", "openrouter/free"),
         model_fast=env("MODEL_FAST", "openrouter/free"),
         model_fallback=env("MODEL_FALLBACK"),
+        reasoning_fast=env("REASONING_FAST", "off").lower(),
+        reasoning_smart=env("REASONING_SMART", "low").lower(),
     )

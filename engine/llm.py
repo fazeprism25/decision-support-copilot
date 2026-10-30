@@ -12,7 +12,7 @@ class LLMError(Exception):
     pass
 
 
-def _call_once(model: str, system: str, prompt: str, max_tokens: int) -> str:
+def _call_once(model: str, system: str, prompt: str, max_tokens: int, reasoning: str = "off") -> str:
     s = get_settings()
     if s.provider == "anthropic":
         import anthropic
@@ -27,10 +27,12 @@ def _call_once(model: str, system: str, prompt: str, max_tokens: int) -> str:
     from openai import OpenAI
 
     client = OpenAI(api_key=s.api_key, base_url=s.base_url, timeout=60)
-    # Hide "thinking" text from reasoning models; reasoning still uses tokens, so keep a floor.
+    # "off" disables thinking (much faster); otherwise think at that effort but hide the thinking text.
+    # Thinking still uses tokens, so keep a floor.
+    rb = {"enabled": False} if reasoning == "off" else {"effort": reasoning, "exclude": True}
     resp = client.chat.completions.create(
-        model=model, max_tokens=max(max_tokens, 1024),
-        extra_body={"reasoning": {"exclude": True}},
+        model=model, max_tokens=max(max_tokens, 1024 if reasoning == "off" else 4096),
+        extra_body={"reasoning": rb},
         messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
     )
     return resp.choices[0].message.content or ""
@@ -43,12 +45,13 @@ def chat(prompt: str, system: str = "You are a precise assistant.", tier: str = 
     if not s.ai_enabled:
         raise LLMError("AI is off: no LLM_API_KEY in .env.")
     models = [s.model_smart if tier == "smart" else s.model_fast]
+    reasoning = s.reasoning_smart if tier == "smart" else s.reasoning_fast
     if s.model_fallback and s.model_fallback not in models:
         models.append(s.model_fallback)
     errors = []
     for m in models:
         try:
-            text = _call_once(m, system, prompt, max_tokens)
+            text = _call_once(m, system, prompt, max_tokens, reasoning)
             if text.strip():
                 return text
             errors.append(f"{m}: empty reply")

@@ -24,7 +24,7 @@ NUMERIC_ROLES = {"money", "quantity", "duration", "rating", "measure"}
 _HINTS = {
     "id": r"(^|_|\b)(id|code|no|num|number|key|ref|sku)($|_|\b)",
     "money": r"price|cost|fee|revenue|amount|sales|salary|profit|margin|value|charge|pay|income|spend|discount|tip|wage|bonus",
-    "duration": r"time|min|mins|minute|hour|hrs|duration|days|sec|lead|eta|delay|sla|tat|tenure|wait",
+    "duration": r"time|min|mins|minute|hours|hrs|duration|days|sec|lead|eta|delay|sla|tat|tenure|wait",
     "rating": r"rating|score|stars|csat|nps|satisfaction|review",
     "quantity": r"qty|quantity|count|units|items|orders|pieces|volume|headcount|capacity",
     "location": r"city|region|zone|state|country|area|location|address|lat|lon|postcode|zip|hub|branch|store|warehouse|site|district",
@@ -67,10 +67,14 @@ def rule_role(name: str, p: dict) -> tuple[str, str]:
     return "category", f"{p['n_unique']} distinct labels"
 
 
-def check_role(role: str, p: dict) -> tuple[str, str]:
+def check_role(role: str, p: dict, name: str = "") -> tuple[str, str]:
     """Verify a proposed role against the data. Returns (status, message); status in ok / warn / fail."""
     n_valid = p["n"] - p["missing"]
-    if role in ("ignore", "text"):
+    if role == "ignore":
+        return "ok", ""
+    if role == "text":
+        if p["n_unique"] <= 50 and p.get("avg_len", 0) <= 30:
+            return "fail", f"only {p['n_unique']} short distinct values; looks like labels, not free text"
         return "ok", ""
     if n_valid == 0:
         return "fail", "column is empty"
@@ -81,6 +85,8 @@ def check_role(role: str, p: dict) -> tuple[str, str]:
             return "fail", f"only {p['numeric_rate']:.0%} of values are numbers"
         if role == "rating" and p["n_unique"] > 21:
             return "fail", f"{p['n_unique']} distinct values is too many for a rating scale"
+        if role == "rating" and p["max"] > 10 and not re.search(r"\d+\s*(?:to|-|_)\s*\d+|out_?of", name or ""):
+            return "fail", f"values up to {p['max']:g} are unusual for a rating scale"
         if role in ("duration", "quantity") and p["share_negative"] > 0:
             return "warn", f"{p['share_negative']:.1%} negative values"
         return "ok", ""
@@ -147,17 +153,17 @@ def detect_roles(df: pd.DataFrame, dataset_hash: str, use_ai: bool = True,
         meaning = ""
         if c in ai:
             role, meaning = ai[c]
-            status, msg = check_role(role, p)
+            status, msg = check_role(role, p, c)
             if status == "fail":
                 source, note = "rules (AI rejected)", f"AI said '{role}' but {msg}. Rules: {reason}"
                 role = rule
-                status, msg = check_role(role, p)
+                status, msg = check_role(role, p, c)
             else:
                 source = "AI" if role == rule else "AI (rules said " + rule + ")"
                 note = msg
         else:
             role, source, note = rule, "rules", reason
-            status, msg = check_role(role, p)
+            status, msg = check_role(role, p, c)
             note = f"{reason}; {msg}" if msg else reason
         rows.append({
             "column": c, "role": role, "source": source, "check": status,

@@ -42,6 +42,8 @@ def _reset_for(dataset_id: str, df: pd.DataFrame):
     st.session_state.profile = profile_frame(df)
     st.session_state.roles = None
     st.session_state.roles_version = 0
+    st.session_state.fixes = []
+    st.session_state.qa_history = []
 
 
 def _apply_edits(edited: pd.DataFrame):
@@ -50,7 +52,7 @@ def _apply_edits(edited: pd.DataFrame):
     for i, new in edited["role"].items():
         if new != roles.at[i, "role"]:
             col = roles.at[i, "column"]
-            status, msg = check_role(new, st.session_state.profile[col])
+            status, msg = check_role(new, st.session_state.profile[col], col)
             roles.loc[i, ["role", "source", "check", "note"]] = [new, "user", status, msg or "set by user"]
             changed = True
     if changed:
@@ -92,7 +94,9 @@ def render():
         st.caption(f"Removed {info.dropped_empty_rows} fully empty row(s) and "
                    f"{info.dropped_empty_cols} fully empty column(s).")
     with st.expander(f"Preview (first {min(500, len(df))} of {len(df):,} rows)", expanded=False):
-        st.dataframe(df.head(500), width="stretch")
+        head = df.head(500)
+        mixed = [c for c in head.columns if head[c].dtype == object]  # e.g. numbers mixed with text
+        st.dataframe(head.astype({c: "string" for c in mixed}), width="stretch")
 
     _roles_section(df)
 

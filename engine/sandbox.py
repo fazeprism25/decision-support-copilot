@@ -1,7 +1,9 @@
 """Static checks + isolated execution for LLM-written pandas code.
 Layers: (1) AST allow/deny rules, (2) separate process with no imports and a tiny builtins set, (3) timeout."""
 import ast
+import os
 import pickle
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +12,8 @@ import pandas as pd
 
 WORKER = Path(__file__).with_name("sandbox_worker.py")
 ALLOWED_IMPORTS = {"pandas", "numpy"}
+# the worker gets the environment minus anything secret-looking (API keys reach the app as environment variables)
+_SECRET_VAR = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|^LLM_|^MODEL_", re.I)
 BANNED_NAMES = {"open", "exec", "eval", "compile", "__import__", "globals", "locals", "vars", "getattr",
                 "setattr", "delattr", "input", "breakpoint", "help", "exit", "quit", "memoryview", "type",
                 "object", "super", "classmethod", "staticmethod", "property", "dir"}
@@ -63,7 +67,8 @@ def run_code(code: str, df: pd.DataFrame, timeout: float = 30) -> dict:
     payload = pickle.dumps({"code": clean, "df": df})
     try:
         proc = subprocess.run([sys.executable, "-I", str(WORKER)], input=payload, capture_output=True,
-                              timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                              timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                              env={k: v for k, v in os.environ.items() if not _SECRET_VAR.search(k)})
     except subprocess.TimeoutExpired:
         raise SandboxError(f"Code took longer than {timeout:.0f}s and was stopped.")
     if proc.returncode != 0 or not proc.stdout:

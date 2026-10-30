@@ -187,3 +187,16 @@ def test_buds_unknown_schema_targets():
     cost = next(c for c in money if "cost" in c)
     m = K.run({"calc": "margin", "params": {"revenue": fee, "cost": cost}}, df, ctx)
     assert round(m.value / 2000, 2) == -5.50 and "per record = -5.50" in m.extra
+
+
+def test_sandbox_worker_gets_no_secrets(monkeypatch):
+    """AI-written code runs in a worker that must not see the API key, even if it escaped the code checks."""
+    import os
+
+    from engine import sandbox
+
+    monkeypatch.setenv("LLM_API_KEY", "sk-secret-test")
+    monkeypatch.setattr(sandbox, "check_code", lambda code: (code, []))  # simulate code that slipped past checks
+    out = sandbox.run_code("result = sorted(pd.io.common.os.environ)", pd.DataFrame())  # os reached via pandas
+    assert out["ok"] and out["result"], out
+    assert os.environ["LLM_API_KEY"] == "sk-secret-test" and "LLM_API_KEY" not in out["result"]

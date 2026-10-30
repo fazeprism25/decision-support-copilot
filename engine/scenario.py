@@ -56,6 +56,19 @@ class Target(_M):
         return f"{self.metric}{seg} {self.op} {self.value:g}"
 
 
+CostStatus = Literal["confirmed", "provisional", "unverified"]
+
+
+class CostComponent(_M):
+    """A route cost entry typed by the user (e.g. a toll). Replaces a same-named data component on matching rows."""
+    name: str
+    value: float = Field(description="money per unit")
+    per: Literal["order", "km", "minute"] = "order"
+    status: CostStatus = "unverified"
+    segment_column: str | None = Field(None, description="optional: only rows where this column == segment_value")
+    segment_value: str | None = None
+
+
 class Params(_M):
     measure_changes: list[MeasureChange] = []
     exclusions: list[Exclusion] = []
@@ -65,6 +78,8 @@ class Params(_M):
     util_cap: float | None = Field(None, description="max utilisation receiving entities may reach, 0-1")
     moved_extra_cost: float | None = Field(None, description="assumed extra cost per re-allocated order")
     moved_extra_minutes: float | None = Field(None, description="assumed extra minutes per re-allocated order")
+    cost_components: list[CostComponent] = []
+    exclude_cost_status: list[CostStatus] = []
 
     def is_empty(self) -> bool:
         return self == Params()
@@ -74,7 +89,8 @@ def combine(parts: list[Params]) -> Params:
     """Constraints stack: lists concatenate, scalar assumptions take the latest value."""
     out = Params()
     for p in parts:
-        for f in ("measure_changes", "exclusions", "capacity_changes", "price_changes", "targets"):
+        for f in ("measure_changes", "exclusions", "capacity_changes", "price_changes", "targets", "cost_components",
+                  "exclude_cost_status"):
             getattr(out, f).extend(getattr(p, f))
         for f in SCALAR_FIELDS:
             if getattr(p, f) is not None:
@@ -173,6 +189,14 @@ def validate_params(p: Params, df: pd.DataFrame, roles: dict[str, str], setup: S
                 errs.append(f"'{t.segment_value}' not found in '{t.segment_column}'")
             if t.metric != "on_time_pct":
                 errs.append("segment targets are supported for on_time_pct only")
+    for cc in p.cost_components:
+        if not 0 <= cc.value <= 1e7:
+            errs.append(f"cost '{cc.name}' must be between 0 and 10,000,000")
+        if cc.segment_column:
+            if cc.segment_column not in df:
+                errs.append(f"'{cc.segment_column}' is not a column")
+            elif str(cc.segment_value) not in set(df[cc.segment_column].dropna().astype("string")):
+                errs.append(f"'{cc.segment_value}' not found in '{cc.segment_column}'")
     if p.util_cap is not None and not 0.1 <= p.util_cap <= 1.0:
         errs.append("util_cap must be between 0.1 and 1.0")
     return errs

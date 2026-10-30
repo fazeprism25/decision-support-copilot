@@ -22,7 +22,8 @@ def render():
         kpis=st.session_state.get("kpi_results", []), pack=state.pack(), pack_metrics=state.pack_metrics(),
         params=params, notes=res["notes"], cascade=res["cascade"], recs=st.session_state.get("last_recs", []),
         issues=issues, quality_score=q, days=date_span(df, ctx.roles),
-        ai_status=("AI on" if ok else msg) + (f"; roles: {roles_msg}" if roles_msg else ""), rows_scenario=res["rows"][1])
+        ai_status=("AI on" if ok else msg) + (f"; roles: {roles_msg}" if roles_msg else ""), rows_scenario=res["rows"][1],
+        route=res["route"])
     st.caption("Generated from what the app actually ran on the current data, fixes, mapping and scenario.")
     for s in secs:
         with st.expander(s.title, expanded=s.title.startswith(("1.", "8."))):

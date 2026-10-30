@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from engine.scenario import CapacityChange, Exclusion, MeasureChange, Params, PriceChange, Setup, Target
+from engine.scenario import CapacityChange, CostComponent, Exclusion, MeasureChange, Params, PriceChange, Setup, Target
 
 _NUM = r"(\d+(?:\.\d+)?)"
 _DOWN = r"cut|reduced?|drops?|falls?|lowered|decreased?|down|shrinks?|lose|loses"
@@ -111,6 +111,79 @@ def _measure_column(phrase: str, roles: dict[str, str], setup: Setup, entity_of:
     return None
 
 
+_STATUS_WORDS = r"unverified|provisional|confirmed"
+_CUR = r"(?:rs\.?|inr|₹|\$|usd|eur|€|£|aed)?"
+_PER = r"(?:per|/|an?|each)\s*(?P<unit>orders?|deliver(?:y|ies)|shipments?|trips?|kms?|kilomet\w*|minutes?|mins?)\b"
+
+
+def _cost_status(low: str) -> str:
+    m = re.search(r"\b(unverified|not verified|unconfirmed|provisional|tentative|estimated|confirmed|verified)\b", low)
+    word = m.group(1) if m else "unverified"
+    return {"not verified": "unverified", "unconfirmed": "unverified", "tentative": "provisional",
+            "estimated": "provisional", "verified": "confirmed"}.get(word, word)
+
+
+def _route_cost_rules(low: str, df: pd.DataFrame, roles: dict[str, str], setup: Setup) -> RuleResult | None:
+    """Route cost card: 'exclude unverified costs', '<name> of Rs 40 per order on <label> routes, unverified',
+    'include waiting cost at Rs 2 per minute', 'parking is confirmed at Rs 15 per order'."""
+    from engine.routecost import _DIST_HINT, _ROUTE_HINT, comp_key
+
+    m = re.match(rf"^(?:exclude|ignore|drop|remove|leave out|without)\s+(?:all\s+|the\s+|any\s+)?(?P<st>(?:{_STATUS_WORDS})"
+                 rf"(?:\s*(?:,|and|or|&|/)\s*(?:{_STATUS_WORDS}))*)\s+(?:costs?|components?|estimates?|items?|charges?)$",
+                 low)
+    only = re.match(rf"^(?:use\s+|include\s+|count\s+)?only\s+confirmed\s+(?:costs?|components?)$", low)
+    if m or only:
+        sts = ["provisional", "unverified"] if only else list(dict.fromkeys(re.findall(_STATUS_WORDS, m.group("st"))))
+        if "confirmed" in sts:
+            return RuleResult(False, reason="Confirmed costs cannot be excluded: they are the verified baseline.",
+                              suggestion="Use 'exclude unverified costs' or 'exclude provisional and unverified costs'.")
+        return RuleResult(True, Params(exclude_cost_status=sts),
+                          f"route decision view leaves out {' and '.join(sts)} cost components "
+                          "(all three rankings stay visible).")
+
+    m = re.search(rf"{_CUR}\s*{_NUM}\s*(?:rs\.?|inr|rupees?)?\s*{_PER}", low)
+    if not m:
+        return None
+    head = re.sub(r"^(?:include|add|assume|apply|set|with|charge|there (?:is|are))\s+", "", low[: m.start()])
+    name_m = re.match(r"^(?:an?\s+|the\s+)?(?P<name>[a-z][a-z \-]*?)(?:\s+(?:costs?|charges?|fees?))?\s*"
+                      r"(?:of|at|is|are|=|:|,|costs?|will be|would be|\s)*(?:(?:" + _STATUS_WORDS + r")\s*)?(?:at\s*)?$", head)
+    if not name_m or not name_m.group("name").strip():
+        return None
+    name = comp_key(name_m.group("name"))
+    if not name or name in ("cost", "price"):
+        return None
+    value = float(m.group(1))
+    unit = m.group("unit")
+    per = "km" if unit.startswith(("km", "kilomet")) else "minute" if unit.startswith("min") else "order"
+    if per == "km" and not any(re.search(_DIST_HINT, c.lower()) and roles.get(c) in ("measure", "quantity")
+                               for c in df.columns):
+        return RuleResult(False, reason="A per-km cost needs a distance column, and none was found.",
+                          suggestion=f"Give it per order instead, e.g. '{name} of Rs {value:g} per order'.")
+    status = _cost_status(low)
+    seg_col = seg_val = None
+    tail = low[m.end():]
+    sm = re.search(r"\b(?:on|for|in|at|across|via)\s+(?:the\s+)?(?:route\s+)?(?P<seg>[a-z0-9][a-z0-9 _\-]*?)\s*"
+                   r"(?:routes?|lanes?|zones?|hubs?|orders?|deliveries|regions?|areas?)?\s*(?:,|$|\bunverified|\bprovisional|"
+                   r"\bconfirmed)", tail)
+    if sm and sm.group("seg").strip() not in ("all", "every", "each", "the", ""):
+        seg = sm.group("seg").strip()
+        prefer = [c for c in df.columns if re.search(_ROUTE_HINT, c.lower())] + [setup.entity]
+        hit = _find_values([seg], df, {**roles, **{c: "category" for c in prefer if c}}, prefer)
+        if hit is None:
+            return RuleResult(False, reason=f"'{seg}' is not a value in any label column, so the routes it applies to "
+                                            "are unknown.",
+                              suggestion=f"Use a label from the data, e.g. '{name} of Rs {value:g} per order on <label> "
+                                         "routes, unverified', or leave out the place to apply it to every route.")
+        seg_col, (seg_val,) = hit
+    cc = CostComponent(name=name, value=value, per=per, status=status, segment_column=seg_col, segment_value=seg_val)
+    where = f" on rows where '{seg_col}' = {seg_val}" if seg_col else " on every route"
+    return RuleResult(True, Params(cost_components=[cc]),
+                      f"route cost component '{name}' = {value:g} per {per}{where}, status {status}"
+                      + (" (status not stated: defaults to unverified)" if not re.search(
+                          r"unverified|not verified|unconfirmed|provisional|tentative|estimated|confirmed|verified",
+                          low) else "") + ".")
+
+
 def parse_rules(text: str, df: pd.DataFrame, roles: dict[str, str], setup: Setup,
                 entity_of: dict[str, str] | None = None) -> RuleResult | None:
     entity_of = entity_of or {}
@@ -130,6 +203,10 @@ def parse_rules(text: str, df: pd.DataFrame, roles: dict[str, str], setup: Setup
                    f"'{setup.entity}'" if setup.entity else ""))
         return RuleResult(False, reason=f"Changing the grouping to '{target}' does not change any number, so it "
                                         "cannot be applied as a constraint.", suggestion=sugg + ".")
+
+    cost = _route_cost_rules(low, df, roles, setup)
+    if cost is not None:
+        return cost
 
     aliases = entity_aliases(df, setup.entity, roles) if setup.entity and setup.entity in df else {}
     days_m = re.search(rf"\bfor\s+{_NUM}\s*days?\b", low)

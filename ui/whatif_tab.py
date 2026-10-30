@@ -8,6 +8,7 @@ import streamlit as st
 from engine import kpis as K
 from engine import llm
 from engine.constraints import parse
+from engine import routecost as RC
 from engine.domains import delivery as D
 from engine.scenario import (CapacityChange, MeasureChange, Params, Setup, apply_rows, cascade, change_rows, combine,
                              guess_setup)
@@ -108,11 +109,15 @@ def run_scenario(params: Params) -> dict:
     plan = [it for it in st.session_state.get("kpi_plan", []) if not K.validate(it, df, ctx)]
     base_k, scen_k = K.run_plan(plan, df, ctx), K.run_plan(plan, scen, ctx)
     casc = cascade(df, scen, s, params) if not s.cascade_ready() else None
-    return {"notes": notes, "base": base_k, "scen": scen_k, "cascade": casc, "rows": (len(df), len(scen))}
+    from ui import route_tab
+
+    return {"notes": notes, "base": base_k, "scen": scen_k, "cascade": casc, "rows": (len(df), len(scen)),
+            "route": route_tab.analyse(scen, params), "route_base": route_tab.analyse(df, Params())}
 
 
 def snapshot(res: dict) -> dict[str, float | str]:
     out = {f"KPI · {k.title}": k.value for k in res["scen"] if k.chart is None or k.calc in ("top_n",)}
+    out.update(RC.snapshot(res.get("route")))
     if res["cascade"]:
         for r in res["cascade"]["steps"].itertuples():
             out[f"Cascade · {r.metric}"] = r.scenario
@@ -142,17 +147,13 @@ def apply_constraint(pend):
     log_change(pend.text, pend.interpretation, pend.params, before, after)
 
 
-# ---------- tab ----------
-
-def render():
-    df, ctx, s = state.clean_df(), state.kpi_ctx(), setup()
-    _setup_editor(s, df, ctx)
+def constraint_box(prefix: str, hint: str = ""):
+    """Typed constraint → confirm → stack. Shown on What-if and Route cost; both share one constraint list."""
     st.session_state.setdefault("constraints", [])
-
     st.subheader("New constraint")
-    with st.form("constraint", clear_on_submit=True):
-        text = st.text_input("Type a constraint card, e.g. 'Hub H02 is down for 3 days', 'fee rise capped at 5%', "
-                             "'ignore cancelled orders'")
+    with st.form(f"constraint_{prefix}", clear_on_submit=True):
+        text = st.text_input(hint or "Type a constraint card, e.g. 'Hub H02 is down for 3 days', 'fee rise capped at "
+                             "5%', 'ignore cancelled orders', 'tolls of Rs 40 per order on East routes, unverified'")
         go = st.form_submit_button("Interpret")
     ai_ok, ai_msg = llm.status()
     if not ai_ok:
@@ -168,11 +169,11 @@ def render():
                             f"{pend.interpretation}")
                 st.json(pend.params.model_dump(exclude_defaults=True))
                 c1, c2, _ = st.columns([1, 1, 4])
-                if c1.button("✅ Apply", type="primary"):
+                if c1.button("✅ Apply", type="primary", key=f"{prefix}_apply"):
                     apply_constraint(pend)
                     st.session_state.pending = None
                     st.rerun()
-                if c2.button("Discard"):
+                if c2.button("Discard", key=f"{prefix}_discard"):
                     st.session_state.pending = None
                     st.rerun()
             else:
@@ -181,7 +182,7 @@ def render():
                     st.caption(f"• {e}")
                 if pend.suggestion:
                     st.info(f"Try: {pend.suggestion}")
-                if st.button("Dismiss"):
+                if st.button("Dismiss", key=f"{prefix}_dismiss"):
                     st.session_state.pending = None
                     st.rerun()
 
@@ -190,9 +191,17 @@ def render():
         for i, c in enumerate(st.session_state.constraints):
             c1, c2 = st.columns([8, 1])
             c1.markdown(f"{i + 1}. {c['text']} — *{c['interpretation']}*")
-            if c2.button("Remove", key=f"rmc_{i}"):
+            if c2.button("Remove", key=f"{prefix}_rmc_{i}"):
                 st.session_state.constraints.pop(i)
                 st.rerun()
+
+
+# ---------- tab ----------
+
+def render():
+    df, ctx, s = state.clean_df(), state.kpi_ctx(), setup()
+    _setup_editor(s, df, ctx)
+    constraint_box("wi")
 
     params = current_params()
     res = run_scenario(params)

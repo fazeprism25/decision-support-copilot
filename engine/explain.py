@@ -21,7 +21,7 @@ def build(*, name: str, rows_raw: int, rows_clean: int, roles: pd.DataFrame, ent
           fixes: list, vmap: dict, vmap_confirmed: bool, kpis: list, pack: D.Pack | None, pack_metrics: dict | None,
           params=None, notes: list[str] | None = None, cascade: dict | None = None, recs: list | None = None,
           issues: list | None = None, quality_score: float | None = None, days: int | None = None,
-          ai_status: str = "", rows_scenario: int | None = None) -> list[Section]:
+          ai_status: str = "", rows_scenario: int | None = None, route: dict | None = None) -> list[Section]:
     out = []
 
     s = Section("1. Data used")
@@ -139,5 +139,24 @@ def build(*, name: str, rows_raw: int, rows_clean: int, roles: pd.DataFrame, ent
     if cascade:
         s.lines.append("- Every scenario value is an estimate based on the assumptions in section 6.")
     s.lines.append("- Correlation is not causation: segment differences show where to look, not why.")
+    out.append(s)
+
+    s = Section("9. Route cost (cost analytics)")
+    if route:
+        t = route["totals"]
+        s.lines.append(f"Route = {' × '.join(route['route_cols'])}. Cost per order is ranked three ways: base cost only, "
+                       "base + confirmed components, and base + every component (confirmed, provisional, unverified)."
+                       + (f" Decision view leaves out {' & '.join(route['excluded'])} components." if route["excluded"]
+                          else ""))
+        s.lines.append(f"**{route['verdict_text']}**")
+        s.lines.append(f"Hidden cost: {t['hidden_all']:,.2f} in total ({t['hidden_pct'] or 0:.1f}% of base), of which "
+                       f"{t['hidden_confirmed']:,.2f} is confirmed. Status: calculated from data = confirmed; your "
+                       "entries = unverified unless you state otherwise; a row-level verification column is read when "
+                       "present.")
+        for n in route["notes"]:
+            s.lines.append(f"- {n}")
+        s.table = route["components"][["component", "status", "source", "formula"]]
+    else:
+        s.lines.append("Not computed: set a route grouping and a base cost column on the Route cost tab.")
     out.append(s)
     return out

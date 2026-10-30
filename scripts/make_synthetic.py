@@ -1,5 +1,5 @@
-"""Generate two synthetic datasets unrelated to delivery, used to prove the app is not BUDS-specific.
-Each has one messy column and some duplicate rows. Run: .venv\\Scripts\\python scripts\\make_synthetic.py"""
+"""Generate synthetic datasets used to prove the app is not BUDS-specific: retail and HR (unrelated to delivery,
+one messy column and some duplicate rows each) and a route-cost file for the cost-analytics card. Run: .venv\\Scripts\\python scripts\\make_synthetic.py"""
 from pathlib import Path
 
 import numpy as np
@@ -63,7 +63,38 @@ def hr(seed: int = 11) -> pd.DataFrame:
     return pd.concat([df, dup], ignore_index=True)
 
 
+def routes(seed: int = 5) -> pd.DataFrame:
+    """Route cost card: the cheapest route on base cost carries unverified tolls and more failed attempts."""
+    rng = np.random.default_rng(seed)
+    # route: (region, base cost, failed %, returned %, toll, parking, wait minutes, share of unverified cost rows)
+    spec = {"R01": ("North", 61, 0.03, 0.02, 0, 4, 6, 0.1), "R02": ("North", 66, 0.02, 0.01, 2, 5, 4, 0.1),
+            "R03": ("East", 50, 0.06, 0.03, 9, 3, 9, 0.8), "R04": ("East", 64, 0.04, 0.02, 6, 6, 5, 0.3),
+            "R05": ("South", 56, 0.02, 0.01, 0, 2, 3, 0.1), "R06": ("South", 63, 0.05, 0.03, 1, 7, 8, 0.2),
+            "R07": ("West", 59, 0.08, 0.04, 3, 5, 7, 0.2), "R08": ("West", 70, 0.01, 0.01, 0, 3, 2, 0.1)}
+    rows = []
+    for rid, (reg, base, pf, pr, toll, park, wait, unv) in spec.items():
+        n = int(rng.integers(70, 95))
+        u = rng.random(n)
+        rows.append(pd.DataFrame({
+            "route_id": rid, "region": reg,
+            "distance_km": (base / 6 * rng.uniform(0.8, 1.2, n)).round(1),
+            "base_cost": (base * rng.uniform(0.85, 1.15, n)).round(2),
+            "toll": np.where(rng.random(n) < 0.9, toll, 0) * 1.0,
+            "parking": (park * rng.uniform(0.5, 1.5, n)).round(2),
+            "wait_min": rng.poisson(wait, n),
+            "attempt_status": np.where(u < pf, "failed", np.where(u < pf + pr, "returned", "delivered")),
+            "cost_status": np.where(rng.random(n) < unv, "unverified",
+                                    np.where(rng.random(n) < 0.3, "provisional", "confirmed")),
+        }))
+    df = pd.concat(rows, ignore_index=True).sample(frac=1, random_state=seed).reset_index(drop=True)
+    df.insert(0, "order_id", [f"ORD-{i:05d}" for i in range(1, len(df) + 1)])
+    df.insert(1, "order_date", (pd.Timestamp("2026-09-01") + pd.to_timedelta(rng.integers(0, 28, len(df)), "D"))
+              .strftime("%Y-%m-%d"))
+    return df
+
+
 if __name__ == "__main__":
     retail().to_csv(OUT / "retail_sales.csv", index=False, encoding="utf-8")
     hr().to_csv(OUT / "hr_employees.csv", index=False, encoding="utf-8")
-    print("wrote data/retail_sales.csv and data/hr_employees.csv")
+    routes().to_csv(OUT / "routes_test.csv", index=False, encoding="utf-8")
+    print("wrote data/retail_sales.csv, data/hr_employees.csv and data/routes_test.csv")

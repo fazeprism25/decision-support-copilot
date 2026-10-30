@@ -24,9 +24,11 @@ def compute() -> tuple[list[R.Rec], list[R.Rec], list[dict], object, dict]:
     pk = state.pack()
     days = R.date_span(df, ctx.roles)
     common = dict(ctx=ctx, issues=issues, quality_score=q, pack=pk, days=days)
-    base = R.generate(R.Inputs(df, kpis=res["base"], pack_metrics=state.pack_metrics(), **common))
+    base = R.generate(R.Inputs(df, kpis=res["base"], pack_metrics=state.pack_metrics(), route=res["route_base"],
+                               **common))
     scen = R.generate(R.Inputs(scen_df, kpis=res["scen"], pack_metrics=state.pack_metrics(scen_df),
-                               cascade=res["cascade"], is_scenario=not params.is_empty(), **common))
+                               cascade=res["cascade"], is_scenario=not params.is_empty(), route=res["route"],
+                               **common))
     return base, scen, R.compare(base, scen), params, res
 
 

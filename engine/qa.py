@@ -53,6 +53,8 @@ def _prompt(question: str, schema: str, notes: str) -> str:
         "Write Python code that computes the answer from df.\n"
         "Rules:\n- pd and np are already available; do not import anything else; no files, no printing needed.\n"
         "- Use exact column names. Numeric-looking text columns may need pd.to_numeric(..., errors='coerce').\n"
+        "- For rates, shares and averages, drop rows where any column used in the comparison is missing "
+        "(after conversion) before computing, unless the notes define it differently.\n"
         "- Assign the final answer to `result` (a number, a Series, or a DataFrame with at most 50 rows).\n"
         "- Assign `method` = one sentence stating the filter(s) and the denominator used.\n"
         "- Optionally assign `chart = {'type': 'bar' or 'line', 'x': <column of result>, 'y': <column of result>}` "

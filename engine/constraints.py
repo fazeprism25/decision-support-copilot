@@ -21,7 +21,11 @@ SCHEMA_HELP = """Params JSON schema (all keys optional):
 - targets: [{"metric": "on_time_pct|max_utilisation_pct|margin_per_order|unserved_per_day|avg_cycle_time",
              "op": ">=|<=", "value": <number>, "segment_column": <optional label column>, "segment_value": <its value>}]
 - util_cap: <0-1, max utilisation entities receiving moved orders may reach>
-- moved_extra_cost: <extra cost per re-allocated order>, moved_extra_minutes: <extra minutes per re-allocated order>"""
+- moved_extra_cost: <extra cost per re-allocated order>, moved_extra_minutes: <extra minutes per re-allocated order>
+- cost_components: [{"name": <short cost name, e.g. "toll", "parking", "waiting">, "value": <money per unit>,
+                     "per": "order|km|minute", "status": "confirmed|provisional|unverified" (default unverified),
+                     "segment_column": <optional label column>, "segment_value": <its value>}]  (route cost model)
+- exclude_cost_status: ["unverified" and/or "provisional"]  (drop costs with that status from the route decision)"""
 
 
 @dataclass
@@ -53,7 +57,8 @@ def _context(df: pd.DataFrame, roles: dict[str, str], setup: Setup, profile: dic
 
 
 EXAMPLES = ("'<hub> is down for 3 days', 'capacity cut by 20% across all hubs', 'fee increase capped at 5%', "
-            "'ignore cancelled orders', '<label> orders must reach 80% on time', '<cost column> rises 10%'")
+            "'ignore cancelled orders', '<label> orders must reach 80% on time', '<cost column> rises 10%', "
+            "'tolls of Rs 40 per order on <label> routes, unverified', 'exclude unverified costs'")
 
 
 def _checked(text, params, interpretation, df, roles, setup, source, suggestion="") -> Parsed:

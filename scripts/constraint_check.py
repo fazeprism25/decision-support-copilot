@@ -17,6 +17,12 @@ CARDS = [
     ("Critical orders must reach 80% on time", "apply"),
     ("Rider costs rise 10%", "apply"),
     ("Show results by zone instead of hub", "refuse"),
+    # route cost card
+    ("Tolls of Rs 40 per order on East routes, unverified", "apply"),
+    ("Include waiting cost at Rs 2 per minute", "apply"),
+    ("Parking is confirmed at Rs 15 per order", "apply"),
+    ("Exclude unverified costs", "apply"),
+    ("Tolls of Rs 40 per order on Mars routes", "refuse"),
 ]
 
 

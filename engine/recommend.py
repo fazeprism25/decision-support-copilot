@@ -32,6 +32,8 @@ RULES = {
     "decline": "the measure fell more than 10% between the first and second half of the period",
     "kpi_margin": "a margin KPI is negative",
     "infeasible": "the scenario leaves orders unserved or misses a target",
+    "route_fragile": "the cheapest route differs between base, confirmed and full cost views",
+    "route_cost": "hidden route costs are at least 2% of base cost or change a route's rank",
 }
 
 
@@ -87,6 +89,7 @@ class Inputs:
     cascade: dict | None = None
     days: int | None = None
     is_scenario: bool = False
+    route: dict | None = None  # engine.routecost.compute result
 
 
 def date_span(df: pd.DataFrame, roles: dict[str, str]) -> int | None:
@@ -421,8 +424,42 @@ def _scenario(inp: Inputs) -> list[Rec]:
                 impact=round(min(1.0, 0.5 + uns / load), 4), impact_formula="0.5 + unserved ÷ capacity")]
 
 
+def _route(inp: Inputs) -> list[Rec]:
+    r = inp.route
+    if not r:
+        return []
+    t, w = r["totals"], r["winners"]
+    moved = int(r["routes"]["rank changes"].sum())
+    ev = [Evidence("Hidden cost, all statuses", t["hidden_all"], "money", "Σ full cost − Σ base cost over all orders"),
+          Evidence("Hidden cost, confirmed only", t["hidden_confirmed"], "money",
+                   "Σ (base + confirmed components) − Σ base cost"),
+          Evidence("Hidden cost % of base", t["hidden_pct"], "pct", "hidden cost (all statuses) ÷ base cost × 100"),
+          Evidence("Routes whose rank changes", moved, "int", "rank differs between the three views"),
+          Evidence("Cheapest route, base cost only", w["base"], "text", "lowest base cost per order"),
+          Evidence("Cheapest route, confirmed full cost", w["confirmed"], "text", "lowest (base + confirmed) per order"),
+          Evidence("Cheapest route, full cost (all statuses)", w["all"], "text", "lowest full cost per order"),
+          Evidence("Decision verdict", r["verdict"], "text", r["verdict_text"])]
+    lim = [f"Routes with fewer than {r['min_orders']} orders are not ranked."] + list(r["notes"])
+    assum = [f"{c['component']}: {c['formula']} ({c['status']})" for c in r["components"].to_dict("records")
+             if c["component"] != "base cost"]
+    if r["verdict"] == "Fragile":
+        f = r["flips"][-1]
+        return [Rec("route", "route_fragile",
+                    f"Route choice is fragile: verify {f['component']} before choosing route {f['cheapest before']}",
+                    f"{r['verdict_text']} Confirm that figure first; until then the decision view picks route "
+                    f"{r['decision']}.", ev, assum, lim, confidence="Medium", impact=0.6,
+                    impact_formula="fixed 0.6: the decision changes with unverified inputs")]
+    if (t["hidden_pct"] or 0) >= 2 or moved:
+        return [Rec("route", "route_cost",
+                    f"Rank routes on full cost, not base cost: hidden costs add {t['hidden_pct']:.1f}% to base",
+                    f"Route {w['all']} stays cheapest under every view, but {moved} route(s) change rank once hidden "
+                    "costs are included. Use full cost per order for route decisions.", ev, assum, lim,
+                    impact=round(min(1.0, (t["hidden_pct"] or 0) / 20), 4), impact_formula="hidden % of base ÷ 20")]
+    return []
+
+
 def generate(inp: Inputs) -> list[Rec]:
-    recs = _quality(inp) + _scenario(inp) + _delivery(inp)
+    recs = _quality(inp) + _scenario(inp) + _route(inp) + _delivery(inp)
     if not (inp.pack and inp.pack.active):
         recs += _generic(inp)
     days = inp.days if inp.days is not None else date_span(inp.df, inp.ctx.roles)

@@ -13,3 +13,4 @@ data/Round_1_BUDS.xlsx
 data/BUDS_unknown_schema_test.csv
 new data
 .env.tmp
+setup-log.txt

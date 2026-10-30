@@ -21,6 +21,13 @@ Next time, double-click the same file: it skips everything already done and open
 **Add or change the AI key later:** double-click `Change AI Key - Windows.bat` (Mac: `Change AI Key - Mac.command`),
 paste the key, then restart the app.
 
+**If nothing seems to happen:**
+- Look at the black window. If it says `API key:`, it is waiting for you: paste the key or press Enter.
+- The very first start can take 1-2 minutes (the Mac checks the newly downloaded files). Wait for
+  "The app is running", then the browser opens. If it doesn't, open `http://localhost:8501` in Safari or Chrome.
+- No Terminal commands are needed: don't type `chmod` or `run.sh` (old instructions).
+- Still stuck? Send the file `setup-log.txt` from the app's folder (Mac) to whoever shared the app.
+
 ## Run the tests
 ```
 .venv\Scripts\python -m pytest -q        # Mac: .venv/bin/python -m pytest -q

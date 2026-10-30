@@ -3,9 +3,16 @@
 # AI key (asked once) -> uv (installs Python + libraries, no admin rights) -> Python 3.11 in .venv -> libraries -> app.
 # --change-key (used by "Change AI Key - Mac.command") only asks for a new key and saves it.
 cd "$(dirname "$0")" || exit 1
+# everything shown in this window is also saved to setup-log.txt, to send along if something goes wrong
+exec > >(tee -a setup-log.txt) 2>&1
+echo; echo "---- $(date)"
 
 step() { printf '\n\033[32m== %s\033[0m\n' "$1"; }
-fail() { printf '\n\033[31m%s\033[0m\n' "$1"; read -rp "Press Enter to close."; exit 1; }
+fail() {
+  printf '\n\033[31m%s\033[0m\n' "$1"
+  echo "If this keeps happening, send the file setup-log.txt from this folder to whoever shared the app."
+  read -rp "Press Enter to close."; exit 1
+}
 
 save_key() {  # keep any other settings already in .env; only the key line changes
   src=.env.example; [ -f .env ] && src=.env
@@ -68,6 +75,22 @@ if [ ! -f "$HOME/.streamlit/credentials.toml" ]; then
   mkdir -p "$HOME/.streamlit" && printf '[general]\nemail = ""\n' > "$HOME/.streamlit/credentials.toml"
 fi
 
-# 5. Run
-step "Starting the app. It opens in your browser. Keep this window open while you use it; close it to stop."
-exec "$PY" -m streamlit run app.py
+# 5. Run on the first free port, then open the browser ourselves once the app answers
+PORT=8501
+while (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; do PORT=$((PORT + 1)); done
+URL="http://localhost:$PORT"
+step "Starting the app (the very first start can take 1-2 minutes while the Mac checks the new files)"
+"$PY" -m streamlit run app.py --server.headless true --server.port "$PORT" &
+APP=$!
+trap 'kill $APP 2>/dev/null' EXIT INT TERM
+for _ in $(seq 1 300); do
+  curl -s -o /dev/null "$URL/_stcore/health" && break
+  kill -0 "$APP" 2>/dev/null || fail "The app stopped while starting (see the messages above)."
+  sleep 1
+done
+curl -s -o /dev/null "$URL/_stcore/health" || fail "The app did not start within 5 minutes."
+open "$URL"
+printf '\n\033[32m== The app is running: %s\033[0m\n' "$URL"
+echo "If no browser window opened, copy that address into Safari or Chrome."
+echo "Keep this window open while you use the app. To stop it, close this window."
+wait "$APP"

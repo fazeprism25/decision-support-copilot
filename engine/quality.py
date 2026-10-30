@@ -256,6 +256,17 @@ def apply_fix(df: pd.DataFrame, fix: Fix) -> pd.DataFrame:
     return df
 
 
+RECOMMENDED = {"duplicate_id": "drop_duplicates", "duplicate_record": "drop_duplicates", "negative": "set_missing",
+               "zero_duration": "set_missing", "out_of_scale": "set_missing", "bad_date": "set_missing",
+               "not_numeric": "set_missing", "inconsistent_text": "standardize"}
+
+
+def recommended_fixes(issues: list[Issue]) -> list[Fix]:
+    """Non-destructive defaults: remove repeated records, turn invalid values into missing, merge spellings.
+    Missing values and outliers are left for the user to decide."""
+    return [Fix(i.key, i.rule, i.column, RECOMMENDED[i.rule], dict(i.params)) for i in issues if i.rule in RECOMMENDED]
+
+
 def apply_fixes(df: pd.DataFrame, fixes: list[Fix]) -> pd.DataFrame:
     for f in fixes:
         df = apply_fix(df, f)

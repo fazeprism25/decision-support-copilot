@@ -39,7 +39,7 @@ def _columns_for_prompt(ctx: K.Ctx) -> list[dict]:
 
 def _ai_plan(df, ctx) -> tuple[list[dict], str]:
     sig = hashlib.sha1(str(state.roles_sig()).encode()).hexdigest()[:10]
-    raw = chat_json(K.plan_prompt(_columns_for_prompt(ctx)), tier="smart",
+    raw = chat_json(K.plan_prompt(_columns_for_prompt(ctx)), tier="fast",
                     cache_key=f"kpis:{st.session_state.dataset_id}:{sig}",
                     system="You select analytics calculations from a fixed catalog. Output strict JSON only.")
     items = raw.get("kpis", []) if isinstance(raw, dict) else []
@@ -59,7 +59,7 @@ def _ai_plan(df, ctx) -> tuple[list[dict], str]:
 def _make_plan(df, ctx, use_ai: bool):
     if use_ai and get_settings().ai_enabled:
         try:
-            with st.spinner("AI is choosing KPIs (can take up to a minute on free models)..."):
+            with st.spinner("AI is choosing KPIs..."):
                 plan, msg = _ai_plan(df, ctx)
             st.session_state.kpi_plan, st.session_state.kpi_msg = plan, ("info", msg)
             return

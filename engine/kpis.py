@@ -217,16 +217,19 @@ def on_time_rate(df, ctx, actual, promised, status=None, completed_values=None):
     if status and completed_values:
         mask = df[status].astype("string").isin([str(v) for v in completed_values])
         filt = f"'{status}' in {list(completed_values)}"
-    has_both = mask & a.notna() & p.notna()
-    base = has_both & (a > 0)  # a completed record cannot take 0 minutes: treat as invalid, not as on time
+    base = mask & a.notna() & p.notna()
     hit = int((a[base] <= p[base]).sum())
     n = int(base.sum())
-    return KPI("On-time rate", 100 * hit / n if n else None, "pct",
-               formula=f"rows where '{actual}' ≤ '{promised}' ÷ valid eligible rows", filter=filt,
-               denominator=f"{n:,} valid eligible rows ({hit:,} on time)",
-               exclusions=[f"{int((~mask).sum()):,} rows not in the completed status excluded",
-                           f"{int((mask & ~has_both).sum()):,} completed rows missing a time excluded",
-                           f"{int((has_both & ~base).sum()):,} completed rows with '{actual}' ≤ 0 excluded as invalid"])
+    k = KPI("On-time rate", 100 * hit / n if n else None, "pct",
+            formula=f"rows where '{actual}' ≤ '{promised}' ÷ eligible rows", filter=filt,
+            denominator=f"{n:,} eligible rows ({hit:,} on time)",
+            exclusions=[f"{int((~mask).sum()):,} rows not in the completed status excluded",
+                        f"{int((mask & ~base).sum()):,} completed rows missing a time excluded"])
+    bad = int((base & (a <= 0)).sum())
+    if bad:  # no hidden rule here: invalid values are fixed once, in the Quality tab, for every tab
+        k.warnings.append(f"{bad:,} eligible rows have '{actual}' ≤ 0 and count as on time. "
+                          "Apply the zero-duration fix in the Quality tab to exclude them everywhere.")
+    return k
 
 
 def distribution(df, ctx, col):

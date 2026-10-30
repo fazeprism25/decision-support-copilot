@@ -2,7 +2,7 @@
 import pandas as pd
 import streamlit as st
 
-from engine.quality import FIX_LABELS, Fix, quality_score
+from engine.quality import FIX_LABELS, Fix, quality_score, recommended_fixes
 from ui import state
 
 RULE_NAMES = {
@@ -30,6 +30,14 @@ def render():
             "(calculated).\n\nExtreme values (outliers) are listed but not counted against the score, "
             "because unusual is not necessarily wrong. Checks depend on each column's role (Data tab).")
 
+    rec = recommended_fixes(found)
+    if rec:
+        if st.button(f"✨ Apply recommended fixes ({len(rec)})", type="primary",
+                     help="Removes repeated records, turns invalid values (negative, zero duration, out of scale, "
+                          "unreadable) into missing, merges spelling variants. Missing values and extreme values "
+                          "are left for you to decide. Undo is available below."):
+            st.session_state.fixes.extend(rec)
+            st.rerun()
     if not found:
         st.success("No issues detected with the current roles and fixes.")
     for i in found:

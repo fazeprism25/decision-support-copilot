@@ -30,12 +30,19 @@ def render():
             notes += ("Known data-quality issues still in df (exclude invalid rows, e.g. repeated IDs, zero durations, "
                       "out-of-scale values, and say so in `method`):\n- " + "\n- ".join(open_issues[:12]))
         schema = schema_text(df, state.role_map(), state.meanings(), st.session_state.profile)
-        with st.spinner("Writing and running code (free models can take 30-60s)..."):
-            st.session_state.qa_history.insert(0, ask(q.strip(), df, schema, notes))
+        defs = [f"{k.title}: {k.formula}; filter {k.filter}" for k in st.session_state.get("kpi_results", [])
+                if k.calc in ("on_time_rate", "margin", "share")]
+        if defs:  # same definitions as the KPI cards
+            notes += "\nKPI definitions used on the KPI tab (use the same when relevant):\n- " + "\n- ".join(defs)
+        with st.spinner("Writing and running code..."):
+            a = ask(q.strip(), df, schema, notes)
+            a.data_note = state.cleaning_summary()
+            st.session_state.qa_history.insert(0, a)
 
     for n, a in enumerate(st.session_state.qa_history):
         with st.container(border=True):
             st.markdown(f"**Q: {a.question}**")
+            st.caption(getattr(a, "data_note", ""))
             if a.error:
                 st.error(f"Could not answer after {a.attempts} attempt(s): {a.error}")
             else:

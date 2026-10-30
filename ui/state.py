@@ -59,3 +59,10 @@ def kpi_ctx():
     attrs = st.session_state.get("entity_attrs")
     ent = dict(zip(attrs["attribute"], attrs["entity"])) if attrs is not None and len(attrs) else {}
     return Ctx(roles=role_map(), entity_of=ent)
+
+
+def cleaning_summary() -> str:
+    raw, clean = st.session_state.df, clean_df()
+    fixes = st.session_state.get("fixes", [])
+    return (f"Running on cleaned data: {len(clean):,} rows, {len(raw) - len(clean):,} excluded "
+            f"({len(fixes)} quality fix(es) applied) · the same data the KPIs use")

@@ -193,12 +193,12 @@ def find_issues(df: pd.DataFrame, roles: pd.DataFrame, entity_cols: set[str] = f
                                     {"mapping": canon}))
     ids = [c for c, r in role_of.items() if r == "id"]
     rest = [c for c in df.columns if c not in ids]
-    if ids and rest:
+    if rest:  # with no ID column this finds exact repeated rows
         dup = int(df.duplicated(subset=rest, keep="first").sum())
         if dup:
-            issues.append(Issue("duplicate_record:*", "duplicate_record", ", ".join(ids), dup, n,
-                                f"{dup} rows are identical to an earlier row in every column except the ID",
-                                ["drop_duplicates"], {"subset": rest}))
+            issues.append(Issue("duplicate_record:*", "duplicate_record", ", ".join(ids) or "all columns", dup, n,
+                                f"{dup} rows are identical to an earlier row in every column"
+                                + (" except the ID" if ids else ""), ["drop_duplicates"], {"subset": rest}))
     order = {"high": 0, "medium": 1, "low": 2}
     return sorted(issues, key=lambda i: (order[i.severity], -i.count))
 

@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from engine import llm
+from engine import llm, qa
 
 
 @pytest.fixture(autouse=True)
@@ -20,5 +20,6 @@ def _no_live_ai(monkeypatch, tmp_path):
 
     monkeypatch.setattr(llm, "_call_once", _blocked)
     monkeypatch.setattr(llm, "_CACHE_DIR", tmp_path / "llm_cache")
+    monkeypatch.setattr(qa, "_QA_DIR", tmp_path / "qa_cache")
     yield
     llm.reset()

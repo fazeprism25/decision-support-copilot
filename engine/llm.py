@@ -69,11 +69,16 @@ def _call_once(model: str, system: str, prompt: str, max_tokens: int, reasoning:
     # "off" disables thinking (much faster); otherwise think at that effort but hide the thinking text.
     # Thinking still uses tokens, so keep a floor.
     rb = {"enabled": False} if reasoning == "off" else {"effort": reasoning, "exclude": True}
-    resp = client.chat.completions.create(
-        model=model, max_tokens=max(max_tokens, 1024 if reasoning == "off" else 4096),
-        extra_body={"reasoning": rb},
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model=model, max_tokens=max(max_tokens, 1024 if reasoning == "off" else 4096),
+            extra_body={"reasoning": rb},
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        )
+    except Exception as e:  # some models (e.g. the openrouter/free router) refuse "thinking off"
+        if reasoning == "off" and "reasoning is mandatory" in str(e).lower():
+            return _call_once(model, system, prompt, max_tokens, "low", timeout)
+        raise
     return resp.choices[0].message.content or ""
 
 

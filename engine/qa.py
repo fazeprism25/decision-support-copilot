@@ -1,12 +1,17 @@
 """Natural-language Q&A: LLM writes pandas code → sandbox executes → LLM narrates only the computed result."""
+import hashlib
 import json
+import pickle
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pandas as pd
 
 from engine.llm import LLMError, chat
-from engine.profile import sample_rows
+from engine.profile import sample_rows, to_datetime_clean
 from engine.sandbox import SandboxError, run_code
 
 SYSTEM = "You write short, correct pandas code to answer business questions about a DataFrame named df."
@@ -32,8 +37,9 @@ def schema_text(df: pd.DataFrame, roles: dict[str, str], meanings: dict[str, str
         d = {"column": c, "dtype": str(df[c].dtype), "role": roles.get(c, "ignore")}
         if meanings.get(c):
             d["meaning"] = meanings[c]
-        if "top_values" in p and p.get("n_unique", 99) <= 25:
-            d["labels"] = list(p["top_values"]) + (["..."] if p["n_unique"] > 5 else [])
+        if "top_values" in p and p.get("n_unique", 99) <= 25:  # labels as they are now (after value mapping)
+            top = df[c].dropna().astype("string").value_counts()
+            d["labels"] = top.index[:8].tolist() + (["..."] if len(top) > 8 else [])
         elif "min" in p:
             d["range"] = [p["min"], p["max"]]
         cols.append(d)
@@ -154,3 +160,113 @@ def ask(question: str, df: pd.DataFrame, schema: str, notes: str = "") -> Answer
     except LLMError:
         ans.narration = "(Summary unavailable; see the computed result below.)"
     return ans
+
+
+# ---------- answer cache + example questions ----------
+
+_QA_DIR = Path(__file__).resolve().parent.parent / ".cache" / "qa"
+_PREFETCH = ThreadPoolExecutor(max_workers=2, thread_name_prefix="qa-prefetch")
+_inflight: set[str] = set()
+_lock = threading.Lock()
+
+
+def _key(question: str, data_hash: str) -> str:
+    q = re.sub(r"\s+", " ", question.strip().lower()).rstrip("?. ")
+    return hashlib.sha256(f"{q}|{data_hash}".encode()).hexdigest()[:24]
+
+
+def cached(question: str, data_hash: str) -> Answer | None:
+    path = _QA_DIR / f"{_key(question, data_hash)}.pkl"
+    if path.exists():
+        try:
+            return pickle.loads(path.read_bytes())
+        except Exception:  # stale/corrupt cache entry: recompute
+            return None
+    return None
+
+
+def cached_ask(question: str, df: pd.DataFrame, schema: str, notes: str, data_hash: str) -> tuple[Answer, bool]:
+    """Answer from cache when the same question was asked on the same data; otherwise ask and cache successes."""
+    hit = cached(question, data_hash)
+    if hit is not None:
+        return hit, True
+    ans = ask(question, df, schema, notes)
+    if not ans.error:
+        _QA_DIR.mkdir(parents=True, exist_ok=True)
+        (_QA_DIR / f"{_key(question, data_hash)}.pkl").write_bytes(pickle.dumps(ans))
+    return ans, False
+
+
+def prefetch(questions: list[str], df: pd.DataFrame, schema: str, notes: str, data_hash: str) -> int:
+    """Answer example questions in the background so a click is instant. Returns how many were queued."""
+    n = 0
+    for q in questions:
+        k = _key(q, data_hash)
+        with _lock:
+            if k in _inflight or cached(q, data_hash) is not None:
+                continue
+            _inflight.add(k)
+
+        def job(q=q, k=k):
+            try:
+                cached_ask(q, df, schema, notes, data_hash)
+            finally:
+                with _lock:
+                    _inflight.discard(k)
+
+        _PREFETCH.submit(job)
+        n += 1
+    return n
+
+
+def pending(questions: list[str], data_hash: str) -> int:
+    with _lock:
+        return sum(_key(q, data_hash) in _inflight for q in questions)
+
+
+def example_questions(df: pd.DataFrame, roles: dict[str, str], entity_of: dict[str, str], pack=None) -> list[str]:
+    """Six questions that this dataset can answer, built from column roles (and the domain pack when on)."""
+    qs = []
+    if pack is not None and pack.active:
+        c = pack.cols
+        done = " or ".join(pack.completed) or "completed"
+        if c.get("priority"):
+            qs.append(f"What percentage of {done} orders were on time ({c['actual']} <= {c['promised']}) by {c['priority']}?")
+        qs.append(f"Which {c['entity']} has the largest average ({c['actual']} - {c['promised']}) for {done} orders?")
+        qs.append(f"What is the average ({c['fee']} - {c['cost']}) per order by {c['entity']}?")
+        if c.get("peak"):
+            qs.append(f"What is the on-time percentage for {done} orders by {c['peak']}?")
+        if c.get("status"):
+            qs.append(f"How many orders are there per {c['status']}?")
+    by = lambda *rs: [c for c, r in roles.items() if r in rs and c not in entity_of]
+    groups = sorted([c for c in by("category", "location") if 2 <= df[c].nunique() <= 20], key=lambda c: df[c].nunique())
+    money, nums = by("money"), by("money", "quantity", "duration", "rating", "measure")
+    dates = sorted(by("date"), key=lambda c: df[c].nunique())
+    flags = by("flag")
+    if groups:
+        qs.append(f"How many rows are there per {groups[0]}?")
+    if money and groups:
+        qs.append(f"What is the total {money[0]} by {groups[0]}?")
+    if nums and len(groups) > 1:
+        qs.append(f"Which {groups[1]} has the highest average {nums[-1]}?")
+    if dates:
+        d = to_datetime_clean(df[dates[0]]).dropna()
+        span = (d.max() - d.min()).days if len(d) else 0
+        per = "day" if span <= 31 else "week" if span <= 180 else "month" if span <= 730 else "year"
+        qs.append(f"How many rows are there per {per} of {dates[0]}?" if not money or span > 730 else
+                  f"What is the total {money[0]} per {per} of {dates[0]}?")
+    if flags:
+        top = df[flags[0]].dropna().astype("string").value_counts()
+        if len(top):
+            qs.append(f"What share of rows have {flags[0]} = {top.index[-1]}?")
+    if money and len(groups) > 1:
+        qs.append(f"What are the top 5 {groups[-1]} by total {money[0]}?")
+    if nums:
+        qs.append(f"What is the average and median {nums[0]}?")
+    for g in groups:  # fallbacks so there are always enough
+        for x in nums:
+            qs.append(f"What is the average {x} by {g}?")
+    if flags and groups:
+        qs.append(f"What share of rows have each {flags[0]} value, by {groups[0]}?")
+    qs.append("How many rows and columns does the data have, and which columns have missing values?")
+    return list(dict.fromkeys(qs))[:6]

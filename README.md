@@ -24,6 +24,17 @@ The browser opens at http://localhost:8501. Stop with Ctrl+C in the terminal.
 .venv\Scripts\python -m pytest -q
 ```
 
+## Demo
+See `DEMO.md` for the 5-minute script and what to do if something breaks.
+Sidebar buttons: **Reset everything** and **Load demo scenario**.
+
+## Checks (no AI needed)
+```
+.venv\Scripts\python scripts\constraint_check.py      # typed constraint cards: pass/fail
+.venv\Scripts\python scripts\make_synthetic.py        # rebuild data/retail_sales.csv, data/hr_employees.csv
+.venv\Scripts\python scripts\measure_ai.py            # live AI timing table (uses ~9 API requests)
+```
+
 ## Layout
 - `app.py` – the screen (tabs, sidebar)
 - `engine/` – generic calculations (no dataset-specific names allowed)

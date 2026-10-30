@@ -7,7 +7,7 @@ import pandas as pd
 
 SAMPLE = 5000
 CURRENCY = "₹$€£¥"
-_NUM_JUNK = re.compile(rf"[,\s{CURRENCY}%]|(?:rs|inr|usd|eur|gbp)\.?", flags=re.I)
+_NUM_JUNK = re.compile(rf"[,\s{CURRENCY}%]|\b(?:rs|inr|usd|eur|gbp)\.?", flags=re.I)
 # a number optionally followed by a short unit word, e.g. "32 min", "4.6km", "3 hrs"
 _NUM_UNIT = re.compile(r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)([a-z]{0,5})\.?$", flags=re.I)
 _DMY = re.compile(r"^\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})")
@@ -108,7 +108,7 @@ def profile_column(s: pd.Series) -> dict:
         if not pd.api.types.is_numeric_dtype(s):
             txt = samp.astype("string")
             p["unit"] = unit_suffix(samp)
-            p["currency_symbol"] = bool(txt.str.contains(rf"[{CURRENCY}]|(?:rs|inr|usd|eur|gbp)", case=False).mean() > 0.5)
+            p["currency_symbol"] = bool(txt.str.contains(rf"[{CURRENCY}]|\b(?:rs|inr|usd|eur|gbp)\b", case=False).mean() > 0.5)
             p["percent_sign"] = bool(txt.str.contains("%").mean() > 0.5)
     elif p["date_rate"] >= 0.8 and not is_time:
         dayf = day_first(nonnull) if not pd.api.types.is_datetime64_any_dtype(s) else None

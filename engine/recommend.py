@@ -28,6 +28,7 @@ RULES = {
     "util_mismatch": "reported and calculated utilisation disagree by more than 50%",
     "segment_gap": "a segment's average is at least 25% below the overall average (non-delivery data)",
     "flag_concentration": "a yes/no flag is at least 1.5× more common in one segment",
+    "ratio_gap": "a part-of rate (e.g. returned ÷ sold) is at least 1.5× higher in one segment",
     "decline": "the measure fell more than 10% between the first and second half of the period",
     "kpi_margin": "a margin KPI is negative",
     "infeasible": "the scenario leaves orders unserved or misses a target",
@@ -289,10 +290,15 @@ def _generic(inp: Inputs) -> list[Rec]:
             overall = v.mean()
             if not overall or not np.isfinite(overall) or overall <= 0:
                 continue
-            t = v.groupby(df[g].astype("string")).agg(["mean", "count"])
+            key = df[g].astype("string")
+            t = v.groupby(key).agg(["mean", "count"])
             t = t[t["count"] >= 20]
             if len(t) < 2:
                 continue
+            ok = v.notna() & key.notna()
+            between = (v[ok].groupby(key[ok]).transform("mean") - v[ok].mean()).pow(2).sum()
+            if between / max(((v[ok] - v[ok].mean()) ** 2).sum(), 1e-9) > 0.8:
+                continue  # the group defines the value (e.g. a product's price): not a performance gap
             lo = t.sort_values("mean").iloc[0]
             gap = 1 - lo["mean"] / overall
             score = gap * lo["count"] / len(df)
@@ -307,6 +313,7 @@ def _generic(inp: Inputs) -> list[Rec]:
                        limitations=["A difference in averages is not a cause; check mix effects."],
                        confidence="High" if n >= 100 else "Medium", impact=round(min(1.0, score * 2), 4),
                        impact_formula="(1 − segment mean ÷ overall mean) × segment share × 2"))
+    out += _ratio_gaps(df, roles, ent, groups)
     for f in [c for c, r in roles.items() if r == "flag"]:
         yn = df[f].map(yes_no)
         if yn.notna().mean() < 0.8:
@@ -346,6 +353,47 @@ def _generic(inp: Inputs) -> list[Rec]:
                            [Evidence(k.title, k.value, "number", k.formula + f" ({k.denominator})")],
                            impact=0.3, impact_formula="fixed 0.3 (negative margin)"))
     return out
+
+
+def _ratio_gaps(df, roles, ent, groups) -> list[Rec]:
+    """Part-of pairs (a ≤ b on ≥99% of rows, e.g. returned units vs units): a segment whose rate is ≥1.5× overall."""
+    nums = [c for c, r in roles.items() if r in ("quantity", "measure", "money") and c not in ent]
+    vals = {c: to_numeric_clean(df[c]) for c in nums}
+    best = None
+    for a in nums:
+        for b in nums:
+            kind = lambda c: "money" if roles[c] == "money" else "count"
+            if a == b or kind(a) != kind(b):  # like for like: money with money, counts with counts
+                continue
+            x, y = vals[a], vals[b]
+            ok = x.notna() & y.notna() & (y > 0)
+            if ok.sum() < 50 or (x[ok] < 0).any() or (x[ok] <= y[ok]).mean() < 0.99:
+                continue
+            rate = x[ok].sum() / y[ok].sum()
+            if not 0 < rate < 0.5:
+                continue
+            for g in groups:
+                t = pd.DataFrame({"a": x[ok], "b": y[ok], "g": df.loc[ok, g].astype("string")}).groupby("g").agg(
+                    a=("a", "sum"), b=("b", "sum"), n=("a", "size"))
+                t = t[t["n"] >= 20]
+                if len(t) < 2:
+                    continue
+                t["rate"] = t["a"] / t["b"]
+                top = t.sort_values("rate").iloc[-1]
+                lift = top["rate"] / rate
+                if lift >= 1.5 and (best is None or lift > best[0]):
+                    best = (lift, a, b, g, t["rate"].idxmax(), float(top["rate"]), float(rate), int(top["n"]))
+    if not best:
+        return []
+    lift, a, b, g, name, r_top, r_all, n = best
+    return [Rec(f"ratio_gap:{a}:{b}:{g}", "ratio_gap", f"{a} ÷ {b} is {100 * r_top:.1f}% in {g} '{name}' vs "
+                f"{100 * r_all:.1f}% overall", f"Investigate {g} '{name}': its rate is {lift:.1f}× the average.",
+                [Evidence(f"{a} ÷ {b} in {g} {name}", 100 * r_top, "pct", f"sum('{a}') ÷ sum('{b}'), {n:,} rows"),
+                 Evidence(f"{a} ÷ {b} overall", 100 * r_all, "pct", f"sum('{a}') ÷ sum('{b}'), all rows")],
+                limitations=[f"'{a}' is treated as part of '{b}' because it is ≤ it on 99%+ of rows."],
+                confidence="High" if n >= 100 else "Medium",
+                impact=round(min(1.0, (r_top - r_all) * n / len(df) * 5), 4),
+                impact_formula="(segment rate − overall rate) × segment share × 5")]
 
 
 def _scenario(inp: Inputs) -> list[Rec]:

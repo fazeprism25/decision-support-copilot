@@ -353,7 +353,9 @@ def default_plan(df: pd.DataFrame, ctx: Ctx) -> list[dict]:
     plan += [{"calc": "average", "params": {"col": c}} for c in by("duration", "rating") if c not in ctx.entity_of][:3]
     dates = sorted(by("date"), key=lambda c: df[c].nunique())
     if dates:
-        plan.append({"calc": "trend", "params": {"date": dates[0], "agg": "count"}})
+        span = _date_span(df, dates[0])
+        freq = "D" if span <= 60 else "W" if span <= 365 else "M"
+        plan.append({"calc": "trend", "params": {"date": dates[0], "agg": "count", "freq": freq}})
     groups = sorted([c for c in by("category", "location", "flag") if 2 <= df[c].nunique() <= 20],
                     key=lambda c: df[c].nunique())
     plan += [{"calc": "segment_breakdown", "params": {"group": c, "agg": "count"}} for c in groups[:2]]
